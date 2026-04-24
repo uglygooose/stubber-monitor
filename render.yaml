@@ -1,0 +1,23 @@
+# Render.com blueprint — defines the web service.
+# On the Render dashboard: New > Blueprint, point at this repo, done.
+#
+# Two environment variables need to be set manually in the Render dashboard
+# after the initial deploy (they're marked sync: false so Render doesn't
+# try to autogenerate them):
+#   DATABASE_URL  — Supabase session pooler connection string
+#   INGEST_TOKEN  — long random string, shared with Stubber credential
+services:
+  - type: web
+    name: stubber-monitor
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: INGEST_TOKEN
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.12.3

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stubber Agent Monitor</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>Stubber Agent Monitor</h1>
+      <span class="subtitle">Daily health checks</span>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- ===================== AGENT STATUS CARDS ===================== -->
+    <section class="card">
+      <h2>Agents</h2>
+      {% if agents %}
+        <div class="agent-grid">
+          {% for a in agents %}
+            <div class="agent-card {{ a.status | status_class }}">
+              <div class="agent-head">
+                <span class="status-dot"></span>
+                <div class="agent-name">{{ a.agent_name }}</div>
+                <span class="status-label">{{ a.status | upper }}</span>
+              </div>
+              <p class="agent-summary">{{ a.summary or '—' }}</p>
+              <dl class="agent-kv">
+                <dt>Last check</dt><dd>{{ a.run_at | format_dt }}</dd>
+                <dt>Stubs (24h)</dt><dd>{{ a.stubs_checked }}</dd>
+                <dt>Errors</dt><dd>{{ a.errors_count }}</dd>
+                <dt>Stuck</dt><dd>{{ a.stuck_count }}</dd>
+                <dt>Flagged</dt><dd>{{ a.flagged_count }}</dd>
+                <dt>Agent live</dt><dd>{{ 'Yes' if a.agent_live else 'No' }}</dd>
+              </dl>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-state">
+          No checks received yet. Once your Stubber monitor template runs
+          and posts to <code>/ingest</code>, agents will appear here.
+        </p>
+      {% endif %}
+    </section>
+
+    <!-- ======================= WEEKLY SUMMARY ======================= -->
+    <section class="card">
+      <h2>Last 7 days</h2>
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-num">{{ stats.total_checks }}</span><span class="stat-label">checks</span></div>
+        <div class="stat"><span class="stat-num">{{ stats.healthy_count }}</span><span class="stat-label">healthy</span></div>
+        <div class="stat"><span class="stat-num">{{ stats.degraded_count }}</span><span class="stat-label">degraded</span></div>
+        <div class="stat"><span class="stat-num">{{ stats.down_count }}</span><span class="stat-label">down</span></div>
+        <div class="stat"><span class="stat-num">{{ stats.total_stubs }}</span><span class="stat-label">stubs processed</span></div>
+        <div class="stat"><span class="stat-num">{{ stats.total_errors }}</span><span class="stat-label">errors</span></div>
+        <div class="stat open-issues"><span class="stat-num">{{ stats.open_issues }}</span><span class="stat-label">open issues</span></div>
+      </div>
+    </section>
+
+    <!-- ========================= OPEN ISSUES ======================== -->
+    <section class="card">
+      <h2>Open issues</h2>
+      {% if open_issues %}
+        <ul class="issue-list">
+          {% for issue in open_issues %}
+            <li class="issue severity-{{ issue.severity }}">
+              <div class="issue-head">
+                <span class="severity-tag">{{ issue.severity | upper }}</span>
+                <span class="rule-name">{{ issue.rule }}</span>
+                <span class="agent-tag">{{ issue.agent_name }}</span>
+                <span class="issue-time">{{ issue.created_at | format_dt }}</span>
+              </div>
+              <p class="issue-msg">{{ issue.message }}</p>
+              {% if issue.details %}
+                <details>
+                  <summary>Details</summary>
+                  <pre>{{ issue.details | pretty_json }}</pre>
+                </details>
+              {% endif %}
+              <form method="post" action="{{ url_for('resolve', issue_id=issue.id) }}">
+                <button type="submit" class="btn-resolve">Mark resolved</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">No open issues. 🎉</p>
+      {% endif %}
+    </section>
+
+    <!-- ========================= HISTORY ============================ -->
+    <section class="card">
+      <h2>Recent check history</h2>
+      {% if history %}
+        <div class="table-wrap">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Agent</th>
+                <th>Status</th>
+                <th>Stubs</th>
+                <th>Errors</th>
+                <th>Stuck</th>
+                <th>Live</th>
+                <th>Summary</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for c in history %}
+                <tr>
+                  <td>{{ c.run_at | format_dt }}</td>
+                  <td>{{ c.agent_name }}</td>
+                  <td><span class="status-pill {{ c.status | status_class }}">{{ c.status }}</span></td>
+                  <td>{{ c.stubs_checked }}</td>
+                  <td>{{ c.errors_count }}</td>
+                  <td>{{ c.stuck_count }}</td>
+                  <td>{{ 'Yes' if c.agent_live else 'No' }}</td>
+                  <td class="summary-cell">{{ c.summary or '—' }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="empty-state">No history yet.</p>
+      {% endif %}
+    </section>
+
+  </main>
+
+  <footer class="foot">
+    Refreshes every 5 min · <a href="/healthz">health</a>
+  </footer>
+
+  <script>
+    setTimeout(() => window.location.reload(), 5 * 60 * 1000);
+  </script>
+</body>
+</html>
