@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import os
 import secrets
 from datetime import datetime, timezone
@@ -288,6 +289,17 @@ def mark_issue_resolved(issue_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
+
+# Render's Linux base image sometimes doesn't register .css/.js mime types,
+# which makes browsers reject the stylesheet. Force them here.
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/javascript", ".js")
+
+
+@app.route("/favicon.ico")
+def favicon():
+    # Suppress the 404 in logs. Replace with a real favicon later if desired.
+    return "", 204
 
 
 @app.template_filter("pretty_json")
