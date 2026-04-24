@@ -306,5 +306,3 @@ mismatch. `render.yaml` pins Python 3.12.3; make sure your local
 
 **Dashboard timezone** — all timestamps are displayed in UTC. If you
 want SAST (Africa/Johannesburg, UTC+2), edit `format_dt` in `app.py`.
-#   s t u b b e r - m o n i t o r  
- 
