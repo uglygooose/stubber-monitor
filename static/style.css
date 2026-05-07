@@ -342,6 +342,56 @@ body {
   text-align: center;
 }
 
+/* ── Metrics panel (the underlying numbers from the check) ─────────── */
+.metrics-panel {
+  margin-bottom: 28px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.metrics-head {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 12px;
+}
+.metrics-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 18px 28px;
+}
+.metric-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.metric-cell.wide {
+  grid-column: span 2;
+}
+.metric-cell .mk {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.metric-cell .mv {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 18px;
+  color: var(--text-primary);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.metric-cell .mv.mono {
+  font-size: 13px;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
 .day-detail {
   padding-top: 4px;
   display: grid;

@@ -114,6 +114,19 @@ function fmtAge(iso) {
   if (h < 36) return h + 'h';
   return Math.floor(h / 24) + 'd';
 }
+// Render a full timestamp for display (date + HH:MM SAST, with relative age).
+function fmtFullTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  // SAST is UTC+2, no DST. Render in local-readable format.
+  const yr = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const da = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${yr}-${mo}-${da} ${hh}:${mm} · ${fmtAge(iso)} ago`;
+}
 
 // Latest non-missing check (today first, walking back)
 function latestRealCheck(agent) {
@@ -238,16 +251,37 @@ function renderDetail() {
     }).join('');
   }
 
-  // raw payload
+  // raw payload — show what Stubber actually sent us, not a synthesised version
   const raw = selected.verdict === 'missing' ? null : {
     agent_id: a.agent_id,
     checked_at: selected.checked_at,
     verdict: selected.verdict,
     stubs_total: selected.stubs_total,
     stubs_flagged: selected.stubs_flagged,
-    issues: selected.issues
+    issues: selected.issues,
+    metrics: selected.metrics
   };
   const rawText = raw ? JSON.stringify(raw, null, 2) : '— no payload —';
+
+  // metrics panel — the underlying numbers Stubber's check produced.
+  // null means the check predates the metrics field or was missing.
+  const m = selected.metrics;
+  let metricsHtml = '';
+  if (m && typeof m === 'object') {
+    const cells = [];
+    if (m.created_24h != null)     cells.push(`<div class="metric-cell"><span class="mk">new last 24h</span><span class="mv">${m.created_24h.toLocaleString()}</span></div>`);
+    if (m.updated_24h != null)     cells.push(`<div class="metric-cell"><span class="mk">touched 24h</span><span class="mv">${m.updated_24h.toLocaleString()}</span></div>`);
+    if (m.active_stale_3h != null) cells.push(`<div class="metric-cell"><span class="mk">stale &gt;3h</span><span class="mv">${m.active_stale_3h.toLocaleString()}</span></div>`);
+    if (m.avg_daily_7d != null)    cells.push(`<div class="metric-cell"><span class="mk">7-day avg</span><span class="mv">${Number(m.avg_daily_7d).toLocaleString(undefined,{maximumFractionDigits:1})}</span></div>`);
+    if (m.last_seen_at != null)    cells.push(`<div class="metric-cell wide"><span class="mk">last activity</span><span class="mv mono">${fmtFullTime(m.last_seen_at)}</span></div>`);
+    if (cells.length > 0) {
+      metricsHtml = `
+        <section class="metrics-panel">
+          <div class="metrics-head">Underlying metrics</div>
+          <div class="metrics-row">${cells.join('')}</div>
+        </section>`;
+    }
+  }
 
   // header
   const headerV = v === 'stale' ? 'STALE' : v.toUpperCase();
@@ -299,6 +333,8 @@ function renderDetail() {
       <div class="full-strip" id="fullStrip">${stripHtml}</div>
       <div class="full-strip-axis">${axisHtml}</div>
     </section>
+
+    ${metricsHtml}
 
     <section class="day-detail">
       <div class="meta">

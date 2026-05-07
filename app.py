@@ -262,7 +262,8 @@ def fleet_data(days: int = 14) -> list[dict]:
                 verdict,
                 stubs_total,
                 stubs_flagged,
-                issues
+                issues,
+                raw
             FROM checks
             WHERE (checked_at AT TIME ZONE 'Africa/Johannesburg')::date >= %s
             ORDER BY agent_id, day
@@ -282,6 +283,10 @@ def fleet_data(days: int = 14) -> list[dict]:
             d = today - timedelta(days=(days - 1 - i))
             row = agent_checks.get(d)
             if row:
+                # Pull metrics out of raw (the Stubber template puts it there).
+                # Tolerant: if raw is null or shape is wrong, metrics is null.
+                raw = row.get("raw") or {}
+                metrics = raw.get("metrics") if isinstance(raw, dict) else None
                 series.append({
                     "day_offset": (today - d).days,
                     "date": d.isoformat(),
@@ -290,6 +295,7 @@ def fleet_data(days: int = 14) -> list[dict]:
                     "stubs_flagged": row["stubs_flagged"],
                     "checked_at": row["checked_at"].isoformat(),
                     "issues": row["issues"] or [],
+                    "metrics": metrics,
                 })
             else:
                 series.append({
@@ -300,6 +306,7 @@ def fleet_data(days: int = 14) -> list[dict]:
                     "stubs_flagged": None,
                     "checked_at": None,
                     "issues": [],
+                    "metrics": None,
                 })
 
         out.append({
