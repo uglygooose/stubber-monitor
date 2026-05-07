@@ -1,17 +1,23 @@
-"""Stubber agent monitor — web service.
+"""Stubber agent monitor — web service v0.4 (fleet shape, Way B).
 
 Architecture:
-    Stubber (daily scheduled action)
-        ↓ POST /ingest  (bearer token auth)
-    This service (hosted on Render free tier)
+    Stubber (daily scheduled template per agent)
+        ↓ POST /checks  (bearer token auth)
+    This service (Render free tier)
         ↓ writes to
-    Supabase Postgres  (free forever, 0.5GB)
+    Supabase Postgres
         ↑ reads from
-    Dashboard at /  (the UI you look at)
+    Dashboard at /
 
-The check logic itself lives inside Stubber (stubberdb_run_sql + code
-task evaluate the rules, apicall posts the result here). All we do is
-accept the POSTed results and display them.
+Endpoints:
+    GET  /              dashboard UI (renders all agents + 14-day strips)
+    GET  /healthz       liveness check, no auth, no DB
+    POST /agents        register an agent (one-time per agent), bearer auth
+    GET  /agents        list registered agents
+    POST /checks        daily check from Stubber, bearer auth
+    GET  /api/fleet     JSON of fleet state (used by the dashboard)
+
+Auth: bearer token in Authorization header for all writes.
 """
 from __future__ import annotations
 
@@ -19,401 +25,405 @@ import json
 import logging
 import mimetypes
 import os
-import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import psycopg
-from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, jsonify, render_template, request
 from psycopg.rows import dict_row
 
 
+# ── logging ─────────────────────────────────────────────────────────────
 log = logging.getLogger("monitor")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-
-# ---------------------------------------------------------------------------
-# Database
-# ---------------------------------------------------------------------------
-
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS checks (
-    id              BIGSERIAL PRIMARY KEY,
-    agent_name      TEXT NOT NULL,
-    template_uuid   TEXT NOT NULL,
-    run_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    status          TEXT NOT NULL,
-    stubs_checked   INTEGER NOT NULL DEFAULT 0,
-    errors_count    INTEGER NOT NULL DEFAULT 0,
-    stuck_count     INTEGER NOT NULL DEFAULT 0,
-    flagged_count   INTEGER NOT NULL DEFAULT 0,
-    agent_live      BOOLEAN NOT NULL DEFAULT FALSE,
-    summary         TEXT,
-    raw_payload     JSONB
-);
-
-CREATE INDEX IF NOT EXISTS idx_checks_run_at ON checks(run_at DESC);
-CREATE INDEX IF NOT EXISTS idx_checks_agent ON checks(agent_name, run_at DESC);
-
-CREATE TABLE IF NOT EXISTS issues (
-    id          BIGSERIAL PRIMARY KEY,
-    check_id    BIGINT NOT NULL REFERENCES checks(id) ON DELETE CASCADE,
-    severity    TEXT NOT NULL,
-    rule        TEXT NOT NULL,
-    message     TEXT NOT NULL,
-    details     JSONB,
-    resolved    BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_issues_check_id ON issues(check_id);
-CREATE INDEX IF NOT EXISTS idx_issues_unresolved
-    ON issues(resolved, created_at DESC)
-    WHERE resolved = FALSE;
-"""
+SAST = ZoneInfo("Africa/Johannesburg")
 
 
+# ── DB ──────────────────────────────────────────────────────────────────
 def get_db_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if not url:
         raise RuntimeError(
-            "DATABASE_URL is not set. In Render, add it as an environment "
-            "variable using the Supabase connection string (Session pooler)."
+            "DATABASE_URL not set. In Render, paste the Supabase Session "
+            "pooler connection string with the password substituted in."
         )
     return url
 
 
 def db_connect():
-    """Fresh connection per request. Low-volume service, no pool needed."""
+    """Fresh connection per request — low volume, no pool needed."""
     return psycopg.connect(get_db_url(), row_factory=dict_row)
 
 
-def init_db() -> None:
-    with db_connect() as conn, conn.cursor() as cur:
-        cur.execute(SCHEMA_SQL)
-    log.info("Database schema ready")
+# ── auth ────────────────────────────────────────────────────────────────
+def require_bearer(req) -> None:
+    expected = os.environ.get("INGEST_TOKEN")
+    if not expected:
+        abort(500, "INGEST_TOKEN not configured on the server")
+    auth = req.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        abort(401, "Missing bearer token")
+    presented = auth[len("Bearer "):].strip()
+    # constant-time compare
+    if not _consteq(presented, expected):
+        abort(401, "Bad bearer token")
 
 
-# ---------------------------------------------------------------------------
-# Auth — bearer token for /ingest
-# ---------------------------------------------------------------------------
-
-def get_ingest_token() -> str:
-    token = os.environ.get("INGEST_TOKEN")
-    if not token:
-        raise RuntimeError(
-            "INGEST_TOKEN is not set. Generate a long random string and "
-            "configure it as an environment variable both here and in "
-            "Stubber's credentials."
-        )
-    return token
+def _consteq(a: str, b: str) -> bool:
+    if len(a) != len(b):
+        return False
+    out = 0
+    for x, y in zip(a, b):
+        out |= ord(x) ^ ord(y)
+    return out == 0
 
 
-def require_ingest_auth(request) -> None:
-    """Raise 401 if the request doesn't carry the correct bearer token.
-
-    secrets.compare_digest gives us constant-time comparison so timing
-    attacks can't leak the token character-by-character.
-    """
-    header = request.headers.get("Authorization", "")
-    expected = f"Bearer {get_ingest_token()}"
-    if not secrets.compare_digest(header, expected):
-        log.warning("Rejected /ingest request: bad or missing token")
-        abort(401)
+# ── payload validation ──────────────────────────────────────────────────
+VALID_VERDICTS = {"healthy", "degraded", "down"}
+VALID_SEVERITIES = {"info", "warn", "error"}
 
 
-# ---------------------------------------------------------------------------
-# Payload validation
-# ---------------------------------------------------------------------------
+def validate_agent(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a JSON object")
 
-VALID_STATUSES = {"healthy", "degraded", "down", "error"}
-VALID_SEVERITIES = {"critical", "warning", "info"}
+    agent_id = payload.get("agent_id")
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        raise ValueError("agent_id (string) is required")
+    # slug-ish: lowercase, alnum, hyphen
+    if not all(c.isalnum() or c == "-" for c in agent_id):
+        raise ValueError("agent_id must be alphanumeric with hyphens (e.g. 'rep-stock-manager')")
 
+    name = payload.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("name (string) is required")
 
-def validate_payload(data: dict) -> tuple[dict, list[dict]]:
-    """Validate and normalise the incoming check payload.
-
-    Returns (check_row, issue_rows) ready to insert. Raises ValueError on
-    anything structurally wrong — Flask converts that to a 400 for us.
-    """
-    if not isinstance(data, dict):
-        raise ValueError("Payload must be a JSON object")
-
-    required = ("agent_name", "template_uuid", "status")
-    for key in required:
-        if key not in data:
-            raise ValueError(f"Missing required field: {key}")
-
-    status = str(data["status"]).lower()
-    if status not in VALID_STATUSES:
-        raise ValueError(
-            f"status must be one of {sorted(VALID_STATUSES)}, got {status!r}"
-        )
-
-    check = {
-        "agent_name": str(data["agent_name"])[:200],
-        "template_uuid": str(data["template_uuid"])[:64],
-        "status": status,
-        "stubs_checked": int(data.get("stubs_checked", 0)),
-        "errors_count": int(data.get("errors_count", 0)),
-        "stuck_count": int(data.get("stuck_count", 0)),
-        "flagged_count": int(data.get("flagged_count", 0)),
-        "agent_live": bool(data.get("agent_live", False)),
-        "summary": (str(data.get("summary", ""))[:500]) or None,
-        "raw_payload": data,
+    return {
+        "agent_id": agent_id.strip().lower(),
+        "name": name.strip(),
+        "description": (payload.get("description") or "").strip() or None,
+        "model": (payload.get("model") or "").strip() or None,
+        "template_uuid": (payload.get("template_uuid") or "").strip() or None,
+        "deployed_at": payload.get("deployed_at"),  # 'YYYY-MM-DD' or None
     }
 
-    raw_issues = data.get("issues") or []
-    if not isinstance(raw_issues, list):
-        raise ValueError("issues must be a list if provided")
 
-    issues: list[dict] = []
-    for i, raw in enumerate(raw_issues):
-        if not isinstance(raw, dict):
+def validate_check(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a JSON object")
+
+    agent_id = payload.get("agent_id")
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        raise ValueError("agent_id (string) is required")
+
+    verdict = payload.get("verdict")
+    if verdict not in VALID_VERDICTS:
+        raise ValueError(f"verdict must be one of {sorted(VALID_VERDICTS)}, got {verdict!r}")
+
+    checked_at = payload.get("checked_at")
+    if checked_at:
+        try:
+            # accept ISO with or without timezone; default to SAST
+            dt = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=SAST)
+        except (ValueError, AttributeError):
+            raise ValueError(f"checked_at must be ISO 8601 (got {checked_at!r})")
+    else:
+        dt = datetime.now(SAST)
+
+    issues = payload.get("issues") or []
+    if not isinstance(issues, list):
+        raise ValueError("issues must be a list")
+    cleaned_issues = []
+    for i, iss in enumerate(issues):
+        if not isinstance(iss, dict):
             raise ValueError(f"issues[{i}] must be an object")
-        severity = str(raw.get("severity", "warning")).lower()
-        if severity not in VALID_SEVERITIES:
-            raise ValueError(
-                f"issues[{i}].severity must be one of {sorted(VALID_SEVERITIES)}"
-            )
-        issues.append({
-            "severity": severity,
-            "rule": str(raw.get("rule", "unspecified"))[:100],
-            "message": str(raw.get("message", ""))[:1000],
-            "details": raw.get("details"),
-        })
+        sev = iss.get("severity")
+        msg = iss.get("message")
+        if sev not in VALID_SEVERITIES:
+            raise ValueError(f"issues[{i}].severity must be one of {sorted(VALID_SEVERITIES)}")
+        if not isinstance(msg, str) or not msg.strip():
+            raise ValueError(f"issues[{i}].message (string) is required")
+        cleaned_issues.append({"severity": sev, "message": msg.strip()})
 
-    return check, issues
+    def _intornone(v):
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"expected integer or null, got {v!r}")
+
+    return {
+        "agent_id": agent_id.strip().lower(),
+        "checked_at": dt,
+        "verdict": verdict,
+        "stubs_total": _intornone(payload.get("stubs_total")),
+        "stubs_flagged": _intornone(payload.get("stubs_flagged")),
+        "issues": cleaned_issues,
+        "raw": payload,
+    }
 
 
-# ---------------------------------------------------------------------------
-# Queries
-# ---------------------------------------------------------------------------
-
-def insert_check(check: dict, issues: list[dict]) -> int:
+# ── DB ops ──────────────────────────────────────────────────────────────
+def upsert_agent(a: dict) -> None:
     with db_connect() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO checks (agent_name, template_uuid, status,
-                                stubs_checked, errors_count, stuck_count,
-                                flagged_count, agent_live, summary, raw_payload)
-            VALUES (%(agent_name)s, %(template_uuid)s, %(status)s,
-                    %(stubs_checked)s, %(errors_count)s, %(stuck_count)s,
-                    %(flagged_count)s, %(agent_live)s, %(summary)s,
-                    %(raw_payload)s)
+            INSERT INTO agents (agent_id, name, description, model, template_uuid, deployed_at)
+            VALUES (%(agent_id)s, %(name)s, %(description)s, %(model)s, %(template_uuid)s, %(deployed_at)s)
+            ON CONFLICT (agent_id) DO UPDATE SET
+                name          = EXCLUDED.name,
+                description   = EXCLUDED.description,
+                model         = EXCLUDED.model,
+                template_uuid = EXCLUDED.template_uuid,
+                deployed_at   = EXCLUDED.deployed_at,
+                updated_at    = NOW()
+            """,
+            a,
+        )
+
+
+def upsert_check(c: dict) -> int:
+    """Insert a check, or update if one already exists for the same agent + day."""
+    with db_connect() as conn, conn.cursor() as cur:
+        # Verify agent exists first — gives a clearer error than a FK violation
+        cur.execute("SELECT 1 FROM agents WHERE agent_id = %s", (c["agent_id"],))
+        if not cur.fetchone():
+            raise ValueError(
+                f"agent_id '{c['agent_id']}' not registered. "
+                f"POST to /agents first to register the agent."
+            )
+
+        cur.execute(
+            """
+            INSERT INTO checks
+                (agent_id, checked_at, verdict, stubs_total, stubs_flagged, issues, raw)
+            VALUES
+                (%(agent_id)s, %(checked_at)s, %(verdict)s, %(stubs_total)s,
+                 %(stubs_flagged)s, %(issues)s, %(raw)s)
+            ON CONFLICT (agent_id, (date_trunc('day', checked_at AT TIME ZONE 'Africa/Johannesburg')))
+            DO UPDATE SET
+                checked_at    = EXCLUDED.checked_at,
+                received_at   = NOW(),
+                verdict       = EXCLUDED.verdict,
+                stubs_total   = EXCLUDED.stubs_total,
+                stubs_flagged = EXCLUDED.stubs_flagged,
+                issues        = EXCLUDED.issues,
+                raw           = EXCLUDED.raw
             RETURNING id
             """,
-            {**check, "raw_payload": json.dumps(check["raw_payload"])},
+            {
+                **c,
+                "issues": json.dumps(c["issues"]),
+                "raw": json.dumps(c["raw"]),
+            },
         )
-        check_id = cur.fetchone()["id"]
-        for issue in issues:
-            cur.execute(
-                """
-                INSERT INTO issues (check_id, severity, rule, message, details)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (
-                    check_id,
-                    issue["severity"],
-                    issue["rule"],
-                    issue["message"],
-                    json.dumps(issue["details"]) if issue["details"] else None,
-                ),
-            )
-    return check_id
+        return cur.fetchone()["id"]
 
 
-def latest_check_per_agent() -> list[dict]:
-    """For each agent, the most recent check. Drives the status cards."""
-    with db_connect() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT DISTINCT ON (agent_name) *
-            FROM checks
-            ORDER BY agent_name, run_at DESC
-        """)
-        return cur.fetchall()
-
-
-def recent_checks(limit: int = 30) -> list[dict]:
+def list_agents() -> list[dict]:
     with db_connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT * FROM checks ORDER BY run_at DESC LIMIT %s",
-            (limit,),
+            "SELECT agent_id, name, description, model, template_uuid, deployed_at "
+            "FROM agents ORDER BY name"
         )
-        return cur.fetchall()
+        return list(cur.fetchall())
 
 
-def unresolved_issues() -> list[dict]:
+def fleet_data(days: int = 14) -> list[dict]:
+    """Return all agents with their last `days` checks, oldest day first.
+
+    Days with no check are filled with a 'missing' placeholder so the
+    front-end can render the strip without computing gaps.
+    """
+    cutoff = (datetime.now(SAST).date() - timedelta(days=days - 1))
+
     with db_connect() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT i.*, c.agent_name, c.run_at
-            FROM issues i
-            JOIN checks c ON c.id = i.check_id
-            WHERE i.resolved = FALSE
-            ORDER BY i.created_at DESC
-        """)
-        return cur.fetchall()
+        agents = list(cur.execute(
+            "SELECT agent_id, name, description, model, template_uuid, deployed_at "
+            "FROM agents ORDER BY name"
+        ).fetchall())
 
+        if not agents:
+            return []
 
-def weekly_stats() -> dict:
-    with db_connect() as conn, conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT
-                COUNT(*)                                             AS total_checks,
-                SUM(CASE WHEN status='healthy'  THEN 1 ELSE 0 END)   AS healthy_count,
-                SUM(CASE WHEN status='degraded' THEN 1 ELSE 0 END)   AS degraded_count,
-                SUM(CASE WHEN status IN ('down','error') THEN 1 ELSE 0 END) AS down_count,
-                COALESCE(SUM(stubs_checked), 0)                      AS total_stubs,
-                COALESCE(SUM(errors_count), 0)                       AS total_errors
+                agent_id,
+                (checked_at AT TIME ZONE 'Africa/Johannesburg')::date AS day,
+                checked_at,
+                verdict,
+                stubs_total,
+                stubs_flagged,
+                issues
             FROM checks
-            WHERE run_at >= NOW() - INTERVAL '7 days'
-        """)
-        row = cur.fetchone() or {}
-        cur.execute("SELECT COUNT(*) AS n FROM issues WHERE resolved = FALSE")
-        row["open_issues"] = cur.fetchone()["n"]
-    # Replace Nones from an empty table with 0 so the template doesn't choke.
-    return {k: (v if v is not None else 0) for k, v in row.items()}
+            WHERE (checked_at AT TIME ZONE 'Africa/Johannesburg')::date >= %s
+            ORDER BY agent_id, day
+            """,
+            (cutoff,),
+        )
+        rows_by_agent: dict[str, dict] = {}
+        for r in cur.fetchall():
+            rows_by_agent.setdefault(r["agent_id"], {})[r["day"]] = r
+
+    today = datetime.now(SAST).date()
+    out = []
+    for a in agents:
+        agent_checks = rows_by_agent.get(a["agent_id"], {})
+        series = []
+        for i in range(days):
+            d = today - timedelta(days=(days - 1 - i))
+            row = agent_checks.get(d)
+            if row:
+                series.append({
+                    "day_offset": (today - d).days,
+                    "date": d.isoformat(),
+                    "verdict": row["verdict"],
+                    "stubs_total": row["stubs_total"],
+                    "stubs_flagged": row["stubs_flagged"],
+                    "checked_at": row["checked_at"].isoformat(),
+                    "issues": row["issues"] or [],
+                })
+            else:
+                series.append({
+                    "day_offset": (today - d).days,
+                    "date": d.isoformat(),
+                    "verdict": "missing",
+                    "stubs_total": None,
+                    "stubs_flagged": None,
+                    "checked_at": None,
+                    "issues": [],
+                })
+
+        out.append({
+            "agent_id": a["agent_id"],
+            "name": a["name"],
+            "description": a["description"],
+            "model": a["model"],
+            "template_uuid": a["template_uuid"],
+            "deployed_at": a["deployed_at"].isoformat() if a["deployed_at"] else None,
+            "checks": series,  # oldest first; series[-1] is today
+        })
+    return out
 
 
-def mark_issue_resolved(issue_id: int) -> None:
+# ── schema bootstrap (idempotent — no-op after migrate.sql ran) ─────────
+def init_db() -> None:
+    """If migrate.sql hasn't run yet, this prints a clear hint instead of crashing."""
     with db_connect() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE issues SET resolved = TRUE WHERE id = %s", (issue_id,)
+            "SELECT EXISTS ("
+            "  SELECT FROM information_schema.tables "
+            "  WHERE table_name = 'agents'"
+            ")"
         )
+        if not cur.fetchone()["exists"]:
+            log.error(
+                "Tables don't exist yet. Run migrate.sql in the Supabase SQL editor first."
+            )
 
 
-# ---------------------------------------------------------------------------
-# App
-# ---------------------------------------------------------------------------
-
-app = Flask(__name__)
-
-# Render's Linux base image sometimes doesn't register .css/.js mime types,
-# which makes browsers reject the stylesheet. Force them here.
+# ── Flask ───────────────────────────────────────────────────────────────
 mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("application/javascript", ".js")
 
-
-@app.route("/favicon.ico")
-def favicon():
-    # Suppress the 404 in logs. Replace with a real favicon later if desired.
-    return "", 204
-
-
-@app.template_filter("pretty_json")
-def pretty_json(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, indent=2)
-    try:
-        return json.dumps(json.loads(value), indent=2)
-    except (ValueError, TypeError):
-        return str(value)
-
-
-@app.template_filter("status_class")
-def status_class(status: str) -> str:
-    return {
-        "healthy": "status-ok",
-        "degraded": "status-warn",
-        "down": "status-bad",
-        "error": "status-bad",
-    }.get(status, "status-unknown")
-
-
-@app.template_filter("format_dt")
-def format_dt(value) -> str:
-    """Render tz-aware datetimes as 'YYYY-MM-DD HH:MM UTC' — easier to read
-    than full ISO-8601 with microseconds."""
-    if value is None:
-        return "—"
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return value
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-
-# --------- Routes ---------
-
-@app.route("/")
-def index():
-    return render_template(
-        "index.html",
-        agents=latest_check_per_agent(),
-        stats=weekly_stats(),
-        history=recent_checks(limit=20),
-        open_issues=unresolved_issues(),
-    )
+app = Flask(__name__)
 
 
 @app.route("/healthz")
 def healthz():
-    """Cheap liveness check for the hosting platform. Does not touch the DB
-    so it can't get rate-limited off the free tier."""
     return {"ok": True}, 200
 
 
-@app.route("/ingest", methods=["POST"])
-def ingest():
-    """Receives daily check results from Stubber's scheduled template."""
-    require_ingest_auth(request)
-
+@app.route("/agents", methods=["POST"])
+def register_agent():
+    require_bearer(request)
     if not request.is_json:
         abort(400, "Expected application/json")
-
     try:
-        check, issues = validate_payload(request.get_json())
+        agent = validate_agent(request.get_json())
     except ValueError as e:
-        log.warning("Rejected /ingest payload: %s", e)
         return jsonify({"error": str(e)}), 400
-
     try:
-        check_id = insert_check(check, issues)
+        upsert_agent(agent)
     except psycopg.Error as e:
-        log.error("DB insert failed: %s", e)
+        log.error("DB error in /agents: %s", e)
         return jsonify({"error": "database error"}), 500
+    log.info("Registered agent %s", agent["agent_id"])
+    return jsonify({"ok": True, "agent_id": agent["agent_id"]}), 201
 
+
+@app.route("/agents", methods=["GET"])
+def get_agents():
+    try:
+        agents = list_agents()
+    except psycopg.Error as e:
+        log.error("DB error listing agents: %s", e)
+        return jsonify({"error": "database error"}), 500
+    # Convert dates to ISO strings for JSON
+    for a in agents:
+        if a.get("deployed_at"):
+            a["deployed_at"] = a["deployed_at"].isoformat()
+    return jsonify({"agents": agents})
+
+
+@app.route("/checks", methods=["POST"])
+def post_check():
+    require_bearer(request)
+    if not request.is_json:
+        abort(400, "Expected application/json")
+    try:
+        check = validate_check(request.get_json())
+    except ValueError as e:
+        log.warning("Rejected /checks: %s", e)
+        return jsonify({"error": str(e)}), 400
+    try:
+        check_id = upsert_check(check)
+    except ValueError as e:
+        # agent not registered
+        return jsonify({"error": str(e)}), 400
+    except psycopg.Error as e:
+        log.error("DB error in /checks: %s", e)
+        return jsonify({"error": "database error"}), 500
     log.info(
-        "Ingested check %d for agent=%s status=%s issues=%d",
-        check_id, check["agent_name"], check["status"], len(issues),
+        "Check %d agent=%s verdict=%s stubs=%s flagged=%s issues=%d",
+        check_id, check["agent_id"], check["verdict"],
+        check["stubs_total"], check["stubs_flagged"], len(check["issues"]),
     )
     return jsonify({"ok": True, "check_id": check_id}), 201
 
 
-@app.route("/issues/<int:issue_id>/resolve", methods=["POST"])
-def resolve(issue_id: int):
-    # Internal-only endpoint. No CSRF token since this dashboard is not
-    # intended for hostile users — if you ever expose it publicly with
-    # multiple users, add Flask-WTF CSRF.
-    if issue_id <= 0:
-        abort(400)
-    mark_issue_resolved(issue_id)
-    return redirect(url_for("index"))
+@app.route("/api/fleet")
+def api_fleet():
+    try:
+        data = fleet_data()
+    except psycopg.Error as e:
+        log.error("DB error in /api/fleet: %s", e)
+        return jsonify({"error": "database error"}), 500
+    return jsonify({"agents": data, "now_sast": datetime.now(SAST).isoformat()})
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+@app.route("/")
+def index():
+    """Renders the shell; the page fetches /api/fleet and renders client-side.
+    This keeps the template simple and lets the same v4 fleet UI we built
+    in the preview drop in with minor changes."""
+    return render_template("index.html")
 
-# Gunicorn imports `app` directly; init_db needs to run once at boot.
-# Flask 3 removed before_first_request, so we call init_db at import time —
-# this is safe because SCHEMA_SQL is idempotent (CREATE TABLE IF NOT EXISTS).
+
+# ── boot ────────────────────────────────────────────────────────────────
 try:
     init_db()
 except Exception as e:
-    # Don't crash on startup if the DB is briefly unreachable — the first
-    # real request will surface the issue via a 500. Crashing here would
-    # loop the container on Render.
-    log.error("init_db failed at startup: %s (will retry on first request)", e)
+    log.error("init_db check failed (will surface on first request): %s", e)
 
 
 if __name__ == "__main__":
-    # Local dev only. In production Render runs this via gunicorn.
     app.run(host="127.0.0.1", port=5000, debug=True)

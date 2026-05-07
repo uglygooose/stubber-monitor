@@ -1,145 +1,407 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" data-tone="dark">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Stubber Agent Monitor</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<meta charset="utf-8" />
+<title>Stubber · Fleet Health</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <header class="topbar">
-    <div class="topbar-inner">
-      <h1>Stubber Agent Monitor</h1>
-      <span class="subtitle">Daily health checks</span>
+  <div class="app">
+
+    <div class="topbar">
+      <div class="brand">
+        <span class="dot"></span>
+        <span>SIGNAL · STUBBER FLEET</span>
+      </div>
+      <div class="right">
+        <div class="fleet-summary" id="fleetSummary"></div>
+        <div id="nowClock" class="mono">—</div>
+      </div>
     </div>
-  </header>
 
-  <main class="container">
-
-    <!-- ===================== AGENT STATUS CARDS ===================== -->
-    <section class="card">
-      <h2>Agents</h2>
-      {% if agents %}
-        <div class="agent-grid">
-          {% for a in agents %}
-            <div class="agent-card {{ a.status | status_class }}">
-              <div class="agent-head">
-                <span class="status-dot"></span>
-                <div class="agent-name">{{ a.agent_name }}</div>
-                <span class="status-label">{{ a.status | upper }}</span>
-              </div>
-              <p class="agent-summary">{{ a.summary or '—' }}</p>
-              <dl class="agent-kv">
-                <dt>Last check</dt><dd>{{ a.run_at | format_dt }}</dd>
-                <dt>Stubs (24h)</dt><dd>{{ a.stubs_checked }}</dd>
-                <dt>Errors</dt><dd>{{ a.errors_count }}</dd>
-                <dt>Stuck</dt><dd>{{ a.stuck_count }}</dd>
-                <dt>Flagged</dt><dd>{{ a.flagged_count }}</dd>
-                <dt>Agent live</dt><dd>{{ 'Yes' if a.agent_live else 'No' }}</dd>
-              </dl>
-            </div>
-          {% endfor %}
+    <div class="main">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <span class="h">Agents</span>
+          <span class="count" id="agentCount">—</span>
         </div>
-      {% else %}
-        <p class="empty-state">
-          No checks received yet. Once your Stubber monitor template runs
-          and posts to <code>/ingest</code>, agents will appear here.
-        </p>
-      {% endif %}
+        <div id="agentList"></div>
+      </aside>
+
+      <main class="detail" id="detail">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-h">No agents registered yet</div>
+          <div class="empty-p">
+            Register your first agent by POSTing to <code>/agents</code>.
+            Once registered, daily checks from Stubber will start populating here.
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tooltip"></div>
+
+<script>
+// ─── fetch fleet state and render ───────────────────────────────────────
+let agents = [];
+let selectedAgentIdx = 0;
+let selectedDayIdx = 13;  // index into checks array (oldest=0, today=13)
+
+async function loadFleet() {
+  try {
+    const res = await fetch('/api/fleet');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    agents = data.agents || [];
+  } catch (e) {
+    console.error('Failed to load fleet', e);
+    document.getElementById('emptyState').innerHTML = `
+      <div class="empty-h">Could not load fleet data</div>
+      <div class="empty-p">Error: ${e.message}. Check the browser console.</div>
+    `;
+    return;
+  }
+  renderAll();
+}
+
+function renderAll() {
+  document.getElementById('agentCount').textContent = agents.length;
+  renderFleetSummary();
+  renderAgentList();
+  if (agents.length === 0) {
+    document.getElementById('detail').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-h">No agents registered yet</div>
+        <div class="empty-p">
+          Register your first agent by POSTing to <code>/agents</code>.
+          Once registered, daily checks from Stubber will start populating here.
+        </div>
+      </div>
+    `;
+  } else {
+    if (selectedAgentIdx >= agents.length) selectedAgentIdx = 0;
+    renderDetail();
+  }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return iso.slice(0, 10);  // YYYY-MM-DD
+}
+function fmtDDMM(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00');
+  return String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
+}
+function fmtAge(iso) {
+  if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  const h = Math.floor(ms / 3600000);
+  if (h < 1) return Math.floor(ms / 60000) + 'm';
+  if (h < 36) return h + 'h';
+  return Math.floor(h / 24) + 'd';
+}
+
+// Latest non-missing check (today first, walking back)
+function latestRealCheck(agent) {
+  for (let i = agent.checks.length - 1; i >= 0; i--) {
+    if (agent.checks[i].verdict !== 'missing') return agent.checks[i];
+  }
+  return null;
+}
+
+// Computed verdict for the agent: today's verdict, or stale if today is
+// missing AND the last real check was > 36h ago.
+function agentVerdict(agent) {
+  const today = agent.checks[agent.checks.length - 1];
+  if (today.verdict !== 'missing') return today.verdict;
+  const last = latestRealCheck(agent);
+  if (!last) return 'missing';
+  const ageH = (Date.now() - new Date(last.checked_at)) / 3600000;
+  return ageH > 36 ? 'stale' : last.verdict;
+}
+
+// ─── fleet summary ──────────────────────────────────────────────────────
+function renderFleetSummary() {
+  const counts = { healthy: 0, degraded: 0, down: 0, stale: 0, missing: 0 };
+  agents.forEach(a => {
+    counts[agentVerdict(a)] = (counts[agentVerdict(a)] || 0) + 1;
+  });
+  const segs = [];
+  if (counts.healthy)  segs.push(`<span class="seg"><span class="pip healthy"></span><b>${counts.healthy}</b> healthy</span>`);
+  if (counts.degraded) segs.push(`<span class="seg"><span class="pip degraded"></span><b>${counts.degraded}</b> degraded</span>`);
+  if (counts.down)     segs.push(`<span class="seg"><span class="pip down"></span><b>${counts.down}</b> down</span>`);
+  const stale = (counts.stale || 0) + (counts.missing || 0);
+  if (stale)           segs.push(`<span class="seg"><span class="pip stale"></span><b>${stale}</b> stale</span>`);
+  $('fleetSummary').innerHTML = segs.join('');
+}
+
+// ─── sidebar ────────────────────────────────────────────────────────────
+function renderAgentList() {
+  const list = $('agentList');
+  list.innerHTML = '';
+  agents.forEach((a, idx) => {
+    const v = agentVerdict(a);
+    const today = a.checks[a.checks.length - 1];
+    const stubs = today.stubs_total;
+    const flagged = today.stubs_flagged;
+
+    // mini-strip: oldest left, newest right (matches a.checks order)
+    const cells = a.checks.map((c, i) => {
+      const isToday = i === a.checks.length - 1;
+      return `<div class="mc ${c.verdict}${isToday ? ' today' : ''}"></div>`;
+    }).join('');
+
+    const lastTime = today.verdict !== 'missing' ? fmtTime(today.checked_at) :
+                     (latestRealCheck(a) ? fmtAge(latestRealCheck(a).checked_at) + ' ago' : '—');
+
+    const row = document.createElement('div');
+    row.className = 'agent' + (idx === selectedAgentIdx ? ' selected' : '');
+    row.innerHTML = `
+      <div class="pip-col"><span class="pip ${v}"></span></div>
+      <div class="body">
+        <div class="row1">
+          <span class="name">${escape(a.name)}</span>
+          <span class="verdict-tag ${v}">${v}</span>
+        </div>
+        <div class="ministrip">${cells}</div>
+        <div class="row3">
+          <span><span class="k">stubs</span>${stubs ?? '—'}</span>
+          <span><span class="k">flag</span>${flagged ?? '—'}</span>
+          <span><span class="k">last</span>${lastTime}</span>
+        </div>
+      </div>
+    `;
+    row.addEventListener('click', () => {
+      selectedAgentIdx = idx;
+      selectedDayIdx = a.checks.length - 1;
+      renderAgentList();
+      renderDetail();
+    });
+    list.appendChild(row);
+  });
+}
+
+// ─── detail pane ────────────────────────────────────────────────────────
+function renderDetail() {
+  const a = agents[selectedAgentIdx];
+  const v = agentVerdict(a);
+  const today = a.checks[a.checks.length - 1];
+  const detail = $('detail');
+
+  // strip cells
+  const stripHtml = a.checks.map((c, i) => {
+    const cls = ['fc', c.verdict];
+    if (i === a.checks.length - 1) cls.push('today');
+    if (i === selectedDayIdx) cls.push('selected');
+    return `<div class="${cls.join(' ')}" data-idx="${i}"></div>`;
+  }).join('');
+
+  const axisHtml = a.checks.map((c, i) => {
+    if (i % 2 === 0 || i === a.checks.length - 1) {
+      return `<div>${fmtDDMM(c.date)}</div>`;
+    }
+    return `<div></div>`;
+  }).join('');
+
+  // selected day
+  const selected = a.checks[selectedDayIdx];
+  const offset = selected.day_offset;
+  const dayLabel = offset === 0 ? 'today' :
+                   offset === 1 ? 'yesterday' :
+                   `${offset} days ago`;
+
+  // issues
+  let issuesHtml = '';
+  if (selected.verdict === 'missing') {
+    issuesHtml = '<div class="empty">No check posted for this day.</div>';
+  } else if (selected.issues.length === 0) {
+    issuesHtml = '<div class="empty">No issues reported.</div>';
+  } else {
+    issuesHtml = selected.issues.map(iss => {
+      const sev = iss.severity === 'error' ? 'error' :
+                  iss.severity === 'warn'  ? 'warn'  : 'info';
+      return `<div class="issue"><span class="sev ${sev}">${escape(iss.severity)}</span><span class="msg">${escape(iss.message)}</span></div>`;
+    }).join('');
+  }
+
+  // raw payload
+  const raw = selected.verdict === 'missing' ? null : {
+    agent_id: a.agent_id,
+    checked_at: selected.checked_at,
+    verdict: selected.verdict,
+    stubs_total: selected.stubs_total,
+    stubs_flagged: selected.stubs_flagged,
+    issues: selected.issues
+  };
+  const rawText = raw ? JSON.stringify(raw, null, 2) : '— no payload —';
+
+  // header
+  const headerV = v === 'stale' ? 'STALE' : v.toUpperCase();
+  const summaryParts = [];
+  if (today.verdict !== 'missing') {
+    summaryParts.push(`<span><span class="k">stubs</span>${today.stubs_total ?? '—'}</span>`);
+    summaryParts.push(`<span><span class="k">flagged</span>${today.stubs_flagged ?? '—'}</span>`);
+    summaryParts.push(`<span><span class="k">last</span>${fmtTime(today.checked_at)} SAST</span>`);
+    summaryParts.push(`<span><span class="k">age</span>${fmtAge(today.checked_at)} ago</span>`);
+  } else {
+    const last = latestRealCheck(a);
+    if (last) {
+      summaryParts.push(`<span><span class="k">last check</span>${fmtAge(last.checked_at)} ago</span>`);
+      summaryParts.push(`<span><span class="k">that day</span>${last.verdict.toUpperCase()}</span>`);
+    } else {
+      summaryParts.push(`<span><span class="k">no checks received yet</span></span>`);
+    }
+  }
+
+  detail.innerHTML = `
+    <div class="detail-head">
+      <div class="left">
+        <div class="agent-id">${escape(a.agent_id)}</div>
+        <h1>${escape(a.name)}</h1>
+        <div class="verdict-line">
+          <span class="verdict-word ${v}">${headerV}</span>
+          <span class="summary">${summaryParts.join('')}</span>
+        </div>
+      </div>
+      <div class="right">
+        <div class="agent-meta">
+          ${a.description ? escape(a.description) + '<br>' : ''}
+          ${a.model ? `MODEL <b>${escape(a.model)}</b><br>` : ''}
+          ${a.deployed_at ? `DEPLOYED <b>${escape(a.deployed_at)}</b>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <section class="full-strip-section">
+      <div class="full-strip-head">
+        <div>14 days · click any to inspect</div>
+        <div class="legend">
+          <span><span class="swatch healthy"></span>healthy</span>
+          <span><span class="swatch degraded"></span>degraded</span>
+          <span><span class="swatch down"></span>down</span>
+          <span><span class="swatch missing"></span>no check</span>
+        </div>
+      </div>
+      <div class="full-strip" id="fullStrip">${stripHtml}</div>
+      <div class="full-strip-axis">${axisHtml}</div>
     </section>
 
-    <!-- ======================= WEEKLY SUMMARY ======================= -->
-    <section class="card">
-      <h2>Last 7 days</h2>
-      <div class="stat-grid">
-        <div class="stat"><span class="stat-num">{{ stats.total_checks }}</span><span class="stat-label">checks</span></div>
-        <div class="stat"><span class="stat-num">{{ stats.healthy_count }}</span><span class="stat-label">healthy</span></div>
-        <div class="stat"><span class="stat-num">{{ stats.degraded_count }}</span><span class="stat-label">degraded</span></div>
-        <div class="stat"><span class="stat-num">{{ stats.down_count }}</span><span class="stat-label">down</span></div>
-        <div class="stat"><span class="stat-num">{{ stats.total_stubs }}</span><span class="stat-label">stubs processed</span></div>
-        <div class="stat"><span class="stat-num">{{ stats.total_errors }}</span><span class="stat-label">errors</span></div>
-        <div class="stat open-issues"><span class="stat-num">{{ stats.open_issues }}</span><span class="stat-label">open issues</span></div>
+    <section class="day-detail">
+      <div class="meta">
+        <div class="row"><span class="k">Day</span><span class="v">${dayLabel}</span></div>
+        <div class="row"><span class="k">Date</span><span class="v">${fmtDate(selected.date)}</span></div>
+        <div class="row"><span class="k">Time</span><span class="v">${selected.verdict === 'missing' ? '—' : fmtTime(selected.checked_at) + ' SAST'}</span></div>
+        <div class="row"><span class="k">Verdict</span><span class="v verdict ${selected.verdict}">${selected.verdict.toUpperCase()}</span></div>
+        <div class="row"><span class="k">Stubs total</span><span class="v">${selected.stubs_total ?? '—'}</span></div>
+        <div class="row"><span class="k">Flagged</span><span class="v">${selected.stubs_flagged ?? '—'}</span></div>
+      </div>
+      <div class="body">
+        <div class="body-head">Issues</div>
+        <div class="issues">${issuesHtml}</div>
+        <div class="raw-toggle" id="rawToggle">› Raw payload</div>
+        <pre class="raw-payload" id="rawPayload">${escape(rawText)}</pre>
       </div>
     </section>
+  `;
 
-    <!-- ========================= OPEN ISSUES ======================== -->
-    <section class="card">
-      <h2>Open issues</h2>
-      {% if open_issues %}
-        <ul class="issue-list">
-          {% for issue in open_issues %}
-            <li class="issue severity-{{ issue.severity }}">
-              <div class="issue-head">
-                <span class="severity-tag">{{ issue.severity | upper }}</span>
-                <span class="rule-name">{{ issue.rule }}</span>
-                <span class="agent-tag">{{ issue.agent_name }}</span>
-                <span class="issue-time">{{ issue.created_at | format_dt }}</span>
-              </div>
-              <p class="issue-msg">{{ issue.message }}</p>
-              {% if issue.details %}
-                <details>
-                  <summary>Details</summary>
-                  <pre>{{ issue.details | pretty_json }}</pre>
-                </details>
-              {% endif %}
-              <form method="post" action="{{ url_for('resolve', issue_id=issue.id) }}">
-                <button type="submit" class="btn-resolve">Mark resolved</button>
-              </form>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="empty-state">No open issues. 🎉</p>
-      {% endif %}
-    </section>
+  // wire strip cells
+  document.querySelectorAll('#fullStrip .fc').forEach(cell => {
+    const idx = parseInt(cell.dataset.idx, 10);
+    const c = a.checks[idx];
+    cell.addEventListener('mouseenter', e => showTip(c, e));
+    cell.addEventListener('mousemove',  e => positionTip(e));
+    cell.addEventListener('mouseleave', hideTip);
+    cell.addEventListener('click', () => {
+      selectedDayIdx = idx;
+      renderDetail();
+    });
+  });
 
-    <!-- ========================= HISTORY ============================ -->
-    <section class="card">
-      <h2>Recent check history</h2>
-      {% if history %}
-        <div class="table-wrap">
-          <table class="history-table">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Agent</th>
-                <th>Status</th>
-                <th>Stubs</th>
-                <th>Errors</th>
-                <th>Stuck</th>
-                <th>Live</th>
-                <th>Summary</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for c in history %}
-                <tr>
-                  <td>{{ c.run_at | format_dt }}</td>
-                  <td>{{ c.agent_name }}</td>
-                  <td><span class="status-pill {{ c.status | status_class }}">{{ c.status }}</span></td>
-                  <td>{{ c.stubs_checked }}</td>
-                  <td>{{ c.errors_count }}</td>
-                  <td>{{ c.stuck_count }}</td>
-                  <td>{{ 'Yes' if c.agent_live else 'No' }}</td>
-                  <td class="summary-cell">{{ c.summary or '—' }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <p class="empty-state">No history yet.</p>
-      {% endif %}
-    </section>
+  $('rawToggle').addEventListener('click', () => {
+    const p = $('rawPayload');
+    p.classList.toggle('show');
+    $('rawToggle').textContent = p.classList.contains('show') ? '⌄ Raw payload' : '› Raw payload';
+  });
+}
 
-  </main>
+// ─── tooltip ────────────────────────────────────────────────────────────
+const tip = $('tooltip');
+function showTip(check, ev) {
+  const v = check.verdict;
+  tip.innerHTML = `
+    <div class="tt-date">${fmtDate(check.date)}${check.day_offset === 0 ? ' · today' : ''}</div>
+    <div class="tt-verdict ${v}">${v.toUpperCase()}</div>
+    <div class="tt-row"><span class="k">stubs</span><span>${check.stubs_total ?? '—'}</span></div>
+    <div class="tt-row"><span class="k">flagged</span><span>${check.stubs_flagged ?? '—'}</span></div>
+    ${check.issues.length ? `<div class="tt-row" style="margin-top:4px"><span class="k">issues</span><span>${check.issues.length}</span></div>` : ''}
+  `;
+  positionTip(ev);
+  tip.classList.add('show');
+}
+function positionTip(ev) {
+  const r = tip.getBoundingClientRect();
+  const x = Math.min(ev.clientX + 12, window.innerWidth - r.width - 12);
+  const y = Math.max(ev.clientY - r.height - 12, 8);
+  tip.style.left = x + 'px';
+  tip.style.top  = y + 'px';
+}
+function hideTip() { tip.classList.remove('show'); }
 
-  <footer class="foot">
-    Refreshes every 5 min · <a href="/healthz">health</a>
-  </footer>
+function escape(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
-  <script>
-    setTimeout(() => window.location.reload(), 5 * 60 * 1000);
-  </script>
+// ─── keyboard nav ────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  if (agents.length === 0) return;
+  if (e.key === 'ArrowUp' && selectedAgentIdx > 0) {
+    selectedAgentIdx--; selectedDayIdx = agents[selectedAgentIdx].checks.length - 1;
+    renderAgentList(); renderDetail(); e.preventDefault();
+  }
+  if (e.key === 'ArrowDown' && selectedAgentIdx < agents.length - 1) {
+    selectedAgentIdx++; selectedDayIdx = agents[selectedAgentIdx].checks.length - 1;
+    renderAgentList(); renderDetail(); e.preventDefault();
+  }
+  if (e.key === 'ArrowLeft' && selectedDayIdx > 0) {
+    selectedDayIdx--; renderDetail(); e.preventDefault();
+  }
+  if (e.key === 'ArrowRight' && selectedDayIdx < agents[selectedAgentIdx].checks.length - 1) {
+    selectedDayIdx++; renderDetail(); e.preventDefault();
+  }
+});
+
+// ─── clock + auto-refresh ───────────────────────────────────────────────
+function tick() {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2,'0');
+  const mm = String(now.getMinutes()).padStart(2,'0');
+  $('nowClock').textContent = `${hh}:${mm} SAST`;
+}
+tick();
+setInterval(tick, 30000);
+
+// Refresh fleet data every 5 minutes (the checks come daily so this is plenty)
+loadFleet();
+setInterval(loadFleet, 5 * 60 * 1000);
+</script>
 </body>
 </html>
