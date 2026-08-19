@@ -89,7 +89,10 @@ section.view.on{display:block}
 }
 .stat b{display:block;font-family:"Archivo Black",sans-serif;font-size:clamp(18px,4.4vw,28px);line-height:1.1;font-variant-numeric:tabular-nums}
 .stat span{font-family:"Barlow Condensed",sans-serif;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
-#score b{color:var(--lime)} #streak b{color:var(--magenta)} #clock b{color:var(--cyan)}
+#score b{color:var(--lime)}
+.stat.pop{animation:pop .55s cubic-bezier(.2,1.4,.4,1)}
+@keyframes pop{0%{transform:scale(1)}35%{transform:scale(1.14);box-shadow:0 0 34px rgba(200,255,46,.45)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.stat.pop{animation:none} body::before{animation:none}} #streak b{color:var(--magenta)} #clock b{color:var(--cyan)}
 
 /* ---------- stage ---------- */
 .stage{position:relative;border-radius:20px;overflow:hidden;border:1px solid var(--edge);
@@ -161,10 +164,10 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:34px;line-
     </div>
 
     <div class="stage">
-      <canvas id="game" width="900" height="620"></canvas>
+      <canvas id="game" width="900" height="700"></canvas>
       <div class="overlay" id="ovl">
         <h2 id="ovlTitle">READY?</h2>
-        <p id="ovlText">Drag <em>backwards</em> from the ball to load your shot, release to strike. While the ball is flying, hold <b>←</b>/<b>→</b> — or touch either side of the pitch on a phone — to bend it around the keeper. Corners score double.</p>
+        <p id="ovlText">Drag <em>backwards</em> from the ball to load your shot, release to strike. While the ball is flying, hold <b>←</b>/<b>→</b> — or touch either side of the pitch on a phone — to bend it around the keeper. Two runners break off the line the moment you strike, and the keeper reads where the shot is heading — so bend it. Corners score double, and the crowd will let you know.</p>
         <button class="btn" id="startBtn">START MATCH</button>
         <div class="keys">
           <kbd>Drag = aim + power</kbd><kbd>← → or touch = curve</kbd><kbd>R = reset</kbd>
@@ -175,11 +178,12 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:34px;line-
     <div class="grid2">
       <div class="card">
         <h3>Live Physics — change the game while you play</h3>
-        <div class="row"><label>Shot power</label><input type="range" id="sPower" min="0.06" max="0.30" step="0.01" value="0.16"><output id="oPower"></output></div>
+        <div class="row"><label>Shot power</label><input type="range" id="sPower" min="0.06" max="0.30" step="0.01" value="0.19"><output id="oPower"></output></div>
         <div class="row"><label>Turf drag</label><input type="range" id="sFric" min="0.980" max="0.999" step="0.001" value="0.993"><output id="oFric"></output></div>
-        <div class="row"><label>Keeper speed</label><input type="range" id="sKeeper" min="0.5" max="6" step="0.1" value="2.2"><output id="oKeeper"></output></div>
-        <div class="row"><label>Curve force</label><input type="range" id="sCurve" min="0" max="0.5" step="0.02" value="0.22"><output id="oCurve"></output></div>
-        <p class="note">These sliders are wired straight into the variables the game loop reads every frame. Set turf drag to <code>0.999</code> and the ball barely slows down — that is real astroturf versus grass.</p>
+        <div class="row"><label>Keeper speed</label><input type="range" id="sKeeper" min="0.5" max="9" step="0.1" value="2.2"><output id="oKeeper"></output></div>
+        <div class="row"><label>Curve force</label><input type="range" id="sCurve" min="0" max="0.5" step="0.02" value="0.26"><output id="oCurve"></output></div>
+        <div class="row"><label>Defenders</label><input type="range" id="sDef" min="0" max="5" step="1" value="2"><output id="oDef"></output></div>
+        <p class="note">These sliders are wired straight into the variables the game loop reads every frame. Set turf drag to <code>0.999</code> and the ball barely slows down — that is real astroturf versus grass. Drop the defenders to zero if you want a clear sight of goal.</p>
       </div>
       <div class="card">
         <h3>Match Log</h3>
@@ -239,6 +243,14 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:34px;line-
         <p class="note">The keeper is a rectangle, the ball is a circle. To test a hit, find the closest point on the rectangle to the ball's centre, then check whether it is nearer than the ball's radius. Two lines of <code>Math.max</code>/<code>Math.min</code> and one distance check — no library required.</p>
       </div>
       <div class="card">
+        <h3>Why fast things need small steps</h3>
+        <p class="note">A hard shot travels about 20 pixels per frame. Move it in one jump and it can start in front of the keeper and land behind them, never once overlapping — so the save never fires and the ball passes through solid objects. The fix is to move it in several small sub-steps each frame and test for a hit after every one. Real engines call this <code>continuous collision detection</code>; here it is a loop of five lines.</p>
+      </div>
+      <div class="card">
+        <h3>Defence that feels human</h3>
+        <p class="note">The keeper does not follow the ball — it runs the flight forward in its head (<code>predictCrossX</code>), adds a deliberate error, waits out a reaction time, then commits and adjusts slowly. That lag is why a late bend beats it. The runners pick a lane at the strike and charge it, steering only slightly, which leaves gaps you can see before you shoot. Perfect defenders would be easy to write and no fun at all.</p>
+      </div>
+      <div class="card">
         <h3>Make it yours</h3>
         <p class="note">Open this file in any editor and hunt for the <code>CFG</code> object near the top of the script. Change <code>GOAL_W</code> to widen the goal, add a third defender in <code>spawnDefenders()</code>, or set <code>shake</code> higher on a goal for more drama. Save, refresh, see what breaks — breaking it and fixing it is the whole job.</p>
       </div>
@@ -292,6 +304,30 @@ function sfxGoal(){ tone(660,.09,'square',.12); setTimeout(function(){tone(880,.
                     setTimeout(function(){tone(1320,.28,'sawtooth',.10);},170); noise(.7,.10); }
 function sfxSave(){ tone(110,.22,'sawtooth',.14); noise(.15,.16); }
 
+// A crowd is just filtered noise that swells and falls away. Add a wobble
+// on top and your ear hears thousands of people instead of a hiss.
+function crowdNoise(dur, freq, q, vol, wobble){
+  try{
+    var c = audio(), len = Math.floor(c.sampleRate * dur);
+    var buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+    for(var i = 0; i < len; i++){
+      var t = i / len;
+      var env = Math.min(1, t * 9) * Math.pow(1 - t, 1.5);
+      d[i] = (Math.random() * 2 - 1) * env * (1 + wobble * Math.sin(t * 90));
+    }
+    var src = c.createBufferSource(); src.buffer = buf;
+    var f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+    var g = c.createGain(); g.gain.value = vol;
+    src.connect(f); f.connect(g); g.connect(c.destination); src.start();
+  }catch(e){}
+}
+function sfxRoar(){                       // the celebration
+  crowdNoise(2.4, 780, 0.6, 0.55, 0.35);
+  tone(2100, .14, 'sine', .06);
+  setTimeout(function(){ tone(2500, .22, 'sine', .06); }, 140);
+}
+function sfxGroan(){ crowdNoise(1.0, 260, 0.9, 0.30, 0.15); }
+
 /* ================================================================
    SECTION 2 — The game
    ================================================================ */
@@ -301,15 +337,17 @@ var W = cv.width, H = cv.height;
 
 // CFG holds every "magic number". Tweak these to change the feel.
 var CFG = {
-  GOAL_W: 250,        // width of the goal mouth in pixels
-  GOAL_Y: 74,         // how far down the canvas the goal line sits
+  GOAL_W: 246,        // width of the goal mouth in pixels
+  GOAL_Y: 156,        // how far down the canvas the goal line sits
+  CROWD_H: 92,        // the stand along the top of the canvas
   BALL_R: 9,
-  POWER: 0.16,        // drag distance -> speed multiplier
+  POWER: 0.19,        // drag distance -> speed multiplier
   FRICTION: 0.993,    // 1 = ice, 0.9 = deep mud
-  KEEPER_SPEED: 2.2,
-  CURVE: 0.22,        // sideways force per frame while an arrow is held
-  MAX_PULL: 190,      // longest useful drag
-  SPOT: {x: 450, y: 500}
+  KEEPER_SPEED: 2.2,  // the keeper now reads the shot, so give yourself pace
+  CURVE: 0.26,        // sideways force per frame while an arrow is held
+  MAX_PULL: 210,      // longest useful drag
+  DEFENDERS: 2,       // runners on the line before level scaling
+  SPOT: {x: 450, y: 592}
 };
 
 var goalL = W/2 - CFG.GOAL_W/2;
@@ -319,33 +357,92 @@ var ball, keeper, defenders, particles, trail;
 var score = 0, streak = 0, best = 0, level = 1, goals = 0, shots = 0;
 var timeLeft = 60, running = false, dragging = false, aim = {x:0,y:0};
 var shake = 0, flash = 0, resolving = false, curveLeft = 0, touchCurve = 0;
+var goalFx = null;   // holds the celebration while it plays
+var shotInit = false;
 var keys = {};
 
 try{ best = parseInt(localStorage.getItem('strikeCircleBest') || '0', 10) || 0; }catch(e){ best = 0; }
 document.querySelector('#best b').textContent = best;
 
+/* ---------- the stand: a few hundred spectators, built once ---------- */
+var CROWD = [];
+(function buildCrowd(){
+  var seed = 7;
+  function rnd(){ seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+  var shirts = ['#c8ff2e','#2ee6ff','#ff2e88','#f2f7ff','#7f93b3','#ffd166'];
+  for(var r = 0; r < 6; r++){
+    var y = 15 + r * 12;
+    for(var x = 7; x < 900; x += 10){
+      CROWD.push({ x: x + (r % 2 ? 5 : 0), y: y, p: rnd() * 6.28,
+                   c: shirts[(rnd() * shirts.length) | 0], j: 0.4 + rnd() });
+    }
+  }
+})();
+
+function drawCrowd(now, roar){
+  ctx.fillStyle = '#050a14'; ctx.fillRect(0, 0, W, CFG.CROWD_H);
+  ctx.fillStyle = 'rgba(255,255,255,.03)';
+  for(var r = 0; r < 6; r++){ ctx.fillRect(0, 10 + r * 12, W, 1); }   // terrace steps
+
+  for(var i = 0; i < CROWD.length; i++){
+    var s = CROWD[i];
+    var bob = Math.sin(now / 250 + s.p) * (1.2 + roar * 9 * s.j);     // everyone up on a goal
+    ctx.globalAlpha = 0.5 + roar * 0.5;
+    ctx.fillStyle = s.c;
+    ctx.fillRect(s.x - 2.5, s.y - bob, 5, 6);
+  }
+  ctx.globalAlpha = 1;
+
+  // camera flashes ripple through the stand while they celebrate
+  if(roar > 0.05){
+    for(var f = 0; f < 4; f++){
+      if(Math.random() < roar){
+        ctx.fillStyle = 'rgba(255,255,255,' + (0.5 * Math.random() + 0.3) + ')';
+        ctx.fillRect(Math.random() * W, Math.random() * (CFG.CROWD_H - 18), 4, 4);
+      }
+    }
+  }
+
+  // LED ribbon board along the front of the stand
+  var band = CFG.CROWD_H - 17;
+  ctx.fillStyle = '#0a1526'; ctx.fillRect(0, band, W, 17);
+  ctx.fillStyle = roar > 0.05 ? '#c8ff2e' : '#2ee6ff';
+  ctx.font = '700 12px "Barlow Condensed", system-ui, sans-serif';
+  var msg = roar > 0.05
+    ? '  GOAL!  GOAL!  GOAL!  GOAL!  '
+    : '  STRIKE CIRCLE ARENA  \u2022  SCORE ' + score + '  \u2022  LEVEL ' + level + '  \u2022  BEST ' + best + '  ';
+  var wdt = ctx.measureText(msg).width;
+  var off = (now / 14) % wdt;
+  for(var k = -1; k * wdt - off < W; k++){ ctx.fillText(msg, k * wdt - off, band + 12.5); }
+  ctx.fillStyle = 'rgba(255,255,255,.10)'; ctx.fillRect(0, band + 16, W, 2);
+}
+
 function resetBall(){
   ball = { x: CFG.SPOT.x, y: CFG.SPOT.y, vx: 0, vy: 0, live: false };
   curveLeft = 100;              // "curve fuel" — one bend per shot
   trail = [];
-  resolving = false;
+  resolving = false; shotInit = false;
   if(typeof spawnDefenders === 'function'){ spawnDefenders(); }  // send the runners back to the line
 }
 
 function spawnDefenders(){
-  // one runner per level, capped at four, starting on the goal line
+  // runners hold a line across the top of the circle and sprint at you on the strike
   defenders = [];
-  var n = Math.min(1 + Math.floor((level - 1) / 2), 4);
+  var n = Math.min(CFG.DEFENDERS + Math.floor((level - 1) / 3), 5);
+  var span = 380;
   for(var i = 0; i < n; i++){
     var t = (i + 1) / (n + 1);
-    defenders.push({ x: goalL + (goalR - goalL) * t, y: CFG.GOAL_Y + 6, r: 13, speed: 1.5 + level * 0.25 });
+    var hx = (W/2 - span/2) + span * t + (Math.random() - 0.5) * 70;   // never the same wall twice
+    defenders.push({ x: hx, home: hx, y: CFG.GOAL_Y + 175, homeY: CFG.GOAL_Y + 175,
+                     r: 15, phase: i * 1.7, a: Math.PI/2, react: 0,
+                     speed: 3.4 + level * 0.3 });
   }
 }
 
 function newGame(){
   score = 0; streak = 0; level = 1; goals = 0; shots = 0; timeLeft = 60;
   running = true;
-  keeper = { x: W/2, y: CFG.GOAL_Y + 14, w: 62, h: 15, dir: 1 };
+  keeper = { x: W/2, y: CFG.GOAL_Y + 16, w: 54, h: 16, lunge: 0, commit: W/2, err: 0, react: 0 };
   spawnDefenders(); resetBall(); particles = [];
   document.getElementById('log').innerHTML = '';
   document.getElementById('ovl').classList.add('hide');
@@ -392,8 +489,9 @@ cv.addEventListener('pointerup', function(){
   var dist = Math.min(Math.hypot(dx, dy), CFG.MAX_PULL);
   if(dist < 14) return;                      // ignore a nervous tap                      // ignore a nervous tap
   var a = Math.atan2(dy, dx);
-  ball.vx = Math.cos(a) * dist * CFG.POWER * 6;
-  ball.vy = Math.sin(a) * dist * CFG.POWER * 6;
+  var speed = (dist / CFG.MAX_PULL) * CFG.POWER * 100;   // full pull = POWER x 100 px per frame
+  ball.vx = Math.cos(a) * speed;
+  ball.vy = Math.sin(a) * speed;
   ball.live = true; shots++;
   sfxHit();
 });
@@ -412,6 +510,18 @@ function burst(x, y, colour, n){
   }
 }
 
+function confetti(n){
+  var cols = ['#c8ff2e','#2ee6ff','#ff2e88','#ffffff','#ffd166'];
+  for(var i = 0; i < n; i++){
+    particles.push({
+      x: Math.random() * W, y: Math.random() * CFG.CROWD_H,
+      vx: (Math.random() - .5) * 3.4, vy: Math.random() * 2 + 0.8,
+      life: 1, decay: 0.005, g: 0.07, spin: (Math.random() - .5) * .3, rot: Math.random() * 6.28,
+      w: 4 + Math.random() * 6, c: cols[(Math.random() * cols.length) | 0], flake: true
+    });
+  }
+}
+
 function scoreGoal(){
   resolving = true;
   var corner = (ball.x < goalL + 46 || ball.x > goalR - 46);
@@ -420,21 +530,35 @@ function scoreGoal(){
   score += pts; goals++;
   if(score > best){ best = score; try{ localStorage.setItem('strikeCircleBest', String(best)); }catch(e){} }
   if(goals % 3 === 0){ level++; spawnDefenders(); log('Level ' + level + ' — defence steps up', 'var(--cyan)'); }
-  burst(ball.x, CFG.GOAL_Y, corner ? '#ff2e88' : '#c8ff2e', corner ? 90 : 55);
-  shake = corner ? 22 : 13; flash = 1;
-  sfxGoal();
+  burst(ball.x, CFG.GOAL_Y, corner ? '#ff2e88' : '#c8ff2e', corner ? 110 : 70);
+  confetti(corner ? 150 : 100);
+  goalFx = { t: 2.0, x: ball.x, corner: corner, pts: pts, mult: Math.min(streak, 5) };
+  shake = corner ? 24 : 15; flash = 1;
+  sfxGoal(); setTimeout(sfxRoar, 90);
+  var card = document.getElementById('score');
+  card.classList.remove('pop'); void card.offsetWidth; card.classList.add('pop');
   log((corner ? 'TOP BIN! ' : 'GOAL! ') + '+' + pts + (streak > 1 ? '  (x' + Math.min(streak,5) + ' streak)' : ''), 'var(--lime)');
   updateHUD();
-  setTimeout(resetBall, 700);
+  setTimeout(resetBall, 1400);   // let the crowd enjoy it
 }
 
 function saved(who){
   resolving = true; streak = 0;
   burst(ball.x, ball.y, '#7f93b3', 22);
-  shake = 7; sfxSave();
+  shake = 7; sfxSave(); sfxGroan();
   log(who + ' — streak reset', 'var(--magenta)');
   updateHUD();
   setTimeout(resetBall, 600);
+}
+
+/* ---------- where will this shot cross the line? (the keeper's brain) ---------- */
+function predictCrossX(){
+  var px = ball.x, py = ball.y, pvx = ball.vx, pvy = ball.vy, i = 0;
+  if(pvy >= -0.05) return W/2;                    // not travelling goalward
+  while(py > CFG.GOAL_Y && i < 300){
+    px += pvx; py += pvy; pvx *= CFG.FRICTION; pvy *= CFG.FRICTION; i++;
+  }
+  return px;
 }
 
 /* ---------- collision helper: circle vs rectangle ---------- */
@@ -452,11 +576,41 @@ function update(dt){
   if(timeLeft <= 0){ endGame(); return; }
   if(Math.abs(timeLeft * 10 % 10) < 1) updateHUD();
 
-  // keeper slides toward the ball, but is never quite quick enough
-  var target = ball.live ? ball.x : W/2 + Math.sin(Date.now()/700) * 60;
+  // the moment of the strike: keeper picks a spot, runners pick a line
+  if(ball.live && !shotInit){
+    shotInit = true;
+    keeper.err = (Math.random() - 0.5) * 40;   // keepers misread shots too
+    keeper.commit = keeper.x;
+    keeper.react = 0.22;                       // reaction time, in seconds
+    for(var q = 0; q < defenders.length; q++){
+      var dq = defenders[q];
+      // each runner charges its own lane, fanning outward from where it stood.
+      // They are obstacles to shoot around, not heat-seekers.
+      // straight down their own lane, with a slight lean — a moving wall with gaps in it
+      dq.a = Math.PI/2 + (Math.random() - 0.5) * 0.3;
+      dq.react = 0.05 + Math.random() * 0.10;            // a beat to read the strike
+    }
+  }
+
+  // keeper: commits to where the shot is heading, then adjusts slowly
+  var target;
+  if(ball.live){
+    if(keeper.react > 0){ keeper.react -= dt; }
+    else { keeper.commit += (predictCrossX() + keeper.err - keeper.commit) * 0.05; }
+    target = keeper.commit;
+  } else {
+    target = W/2 + Math.sin(Date.now()/700) * 55;
+    keeper.commit = keeper.x;
+  }
   target = Math.max(goalL + keeper.w/2, Math.min(goalR - keeper.w/2, target));
+  var kSpeed = CFG.KEEPER_SPEED + level * 0.22;
   var diff = target - keeper.x;
-  keeper.x += Math.max(-CFG.KEEPER_SPEED, Math.min(CFG.KEEPER_SPEED, diff * 0.12 + Math.sign(diff) * 0.6));
+  keeper.x += Math.max(-kSpeed, Math.min(kSpeed, diff * 0.18 + Math.sign(diff) * 0.5));
+
+  // late lunge: the pad stretches toward the ball once it is close
+  var want = 0;
+  if(ball.live && ball.y < CFG.GOAL_Y + 85){ want = Math.max(-18, Math.min(18, ball.x - keeper.x)); }
+  keeper.lunge += (want - keeper.lunge) * 0.22;
 
   if(!ball.live) return;
 
@@ -466,39 +620,57 @@ function update(dt){
     if(keys.ArrowRight || keys.d || touchCurve ===  1){ ball.vx += CFG.CURVE; curveLeft -= 2.2; }
   }
 
-  ball.x += ball.vx;
-  ball.y += ball.vy;
-  ball.vx *= CFG.FRICTION;
-  ball.vy *= CFG.FRICTION;
-
-  trail.push({x:ball.x, y:ball.y});
-  if(trail.length > 26) trail.shift();
-
-  // side walls bounce
-  if(ball.x < CFG.BALL_R){ ball.x = CFG.BALL_R; ball.vx *= -0.7; }
-  if(ball.x > W - CFG.BALL_R){ ball.x = W - CFG.BALL_R; ball.vx *= -0.7; }
-
-  if(resolving) return;
-
-  // defenders charge the ball
+  // defenders break out on the line they picked at the strike
   for(var i = 0; i < defenders.length; i++){
     var d = defenders[i];
-    var a = Math.atan2(ball.y - d.y, ball.x - d.x);
-    d.x += Math.cos(a) * d.speed; d.y += Math.sin(a) * d.speed;
-    if(Math.hypot(d.x - ball.x, d.y - ball.y) < d.r + CFG.BALL_R){ saved('Blocked by the runner'); return; }
+    if(d.react > 0){ d.react -= dt; continue; }
+    var toBall = Math.atan2(ball.y - d.y, ball.x - d.x);
+    var turn = Math.atan2(Math.sin(toBall - d.a), Math.cos(toBall - d.a));
+    d.a += turn * 0.004;                     // a nudge toward the ball, nothing more
+    d.x += Math.cos(d.a) * d.speed; d.y += Math.sin(d.a) * d.speed;
   }
 
-  // keeper save
-  if(hitsRect(ball.x, ball.y, CFG.BALL_R, keeper.x - keeper.w/2, keeper.y - keeper.h/2, keeper.w, keeper.h)){
-    saved('Keeper stands it up'); return;
+  // A hard shot covers 20+ pixels in a frame. Move it in one jump and it can
+  // pass clean through a keeper without ever touching them, so walk it there
+  // a few pixels at a time and test for a hit at every step.
+  var frameSpeed = Math.hypot(ball.vx, ball.vy);
+  var steps = Math.max(1, Math.ceil(frameSpeed / 4));
+  var sx = ball.vx / steps, sy = ball.vy / steps;
+
+  for(var st = 0; st < steps; st++){
+    ball.x += sx; ball.y += sy;
+
+    // side walls bounce
+    if(ball.x < CFG.BALL_R){ ball.x = CFG.BALL_R; ball.vx *= -0.7; sx = -sx * 0.7; }
+    if(ball.x > W - CFG.BALL_R){ ball.x = W - CFG.BALL_R; ball.vx *= -0.7; sx = -sx * 0.7; }
+
+    if(resolving) return;
+
+    // a runner in the way
+    for(var j = 0; j < defenders.length; j++){
+      var dd = defenders[j];
+      if(Math.hypot(dd.x - ball.x, dd.y - ball.y) < 9 + CFG.BALL_R){ saved('Blocked by the runner'); return; }
+    }
+
+    // keeper save — the hitbox grows on the side the keeper is stretching to
+    var kx0 = keeper.x - keeper.w/2 + Math.min(0, keeper.lunge);
+    var kw  = keeper.w + Math.abs(keeper.lunge);
+    if(hitsRect(ball.x, ball.y, CFG.BALL_R, kx0, keeper.y - keeper.h/2, kw, keeper.h)){
+      saved(Math.abs(keeper.lunge) > 15 ? 'Keeper flies across and pads it away' : 'Keeper stands it up'); return;
+    }
+
+    // over the line?
+    if(ball.y - CFG.BALL_R < CFG.GOAL_Y){
+      if(ball.x > goalL && ball.x < goalR){ scoreGoal(); } else { saved('Wide of the post'); }
+      return;
+    }
+
+    trail.push({x:ball.x, y:ball.y});
   }
 
-  // over the line?
-  if(ball.y - CFG.BALL_R < CFG.GOAL_Y){
-    if(ball.x > goalL && ball.x < goalR){ scoreGoal(); }
-    else { saved('Wide of the post'); }
-    return;
-  }
+  ball.vx *= CFG.FRICTION;
+  ball.vy *= CFG.FRICTION;
+  while(trail.length > 30){ trail.shift(); }
 
   // ran out of legs, or dribbled off the bottom
   if(Math.hypot(ball.vx, ball.vy) < 0.35 || ball.y > H + 30){ saved('Shot ran out of pace'); }
@@ -522,17 +694,17 @@ function drawField(){
 
   // mown stripes
   ctx.fillStyle = 'rgba(255,255,255,.022)';
-  for(var y = 0; y < H; y += 62){ ctx.fillRect(0, y, W, 31); }
+  for(var y = CFG.CROWD_H; y < H; y += 62){ ctx.fillRect(0, y, W, 31); }
 
   ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 2.5;
   ctx.beginPath(); ctx.moveTo(0, CFG.GOAL_Y); ctx.lineTo(W, CFG.GOAL_Y); ctx.stroke();   // back line
 
   // the shooting circle (the "D")
   ctx.beginPath();
-  ctx.arc(W/2, CFG.GOAL_Y, 300, 0.06 * Math.PI, 0.94 * Math.PI);
+  ctx.arc(W/2, CFG.GOAL_Y, 320, 0.06 * Math.PI, 0.94 * Math.PI);
   ctx.setLineDash([]); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.stroke();
   ctx.beginPath();
-  ctx.arc(W/2, CFG.GOAL_Y, 340, 0.08 * Math.PI, 0.92 * Math.PI);
+  ctx.arc(W/2, CFG.GOAL_Y, 360, 0.08 * Math.PI, 0.92 * Math.PI);
   ctx.setLineDash([9, 11]); ctx.strokeStyle = 'rgba(255,255,255,.32)'; ctx.stroke();
   ctx.setLineDash([]);
 
@@ -542,47 +714,78 @@ function drawField(){
 }
 
 function drawGoal(){
+  var top = CFG.CROWD_H + 6;
+
+  ctx.fillStyle = 'rgba(4,10,20,.55)';
+  ctx.fillRect(goalL, top, goalR - goalL, CFG.GOAL_Y - top);
+
   // net
   ctx.save();
   ctx.strokeStyle = 'rgba(220,240,255,.22)'; ctx.lineWidth = 1;
-  for(var x = goalL; x <= goalR; x += 11){ ctx.beginPath(); ctx.moveTo(x, 8); ctx.lineTo(x, CFG.GOAL_Y); ctx.stroke(); }
-  for(var y = 8; y <= CFG.GOAL_Y; y += 11){ ctx.beginPath(); ctx.moveTo(goalL, y); ctx.lineTo(goalR, y); ctx.stroke(); }
+  for(var x = goalL; x <= goalR; x += 11){ ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, CFG.GOAL_Y); ctx.stroke(); }
+  for(var y = top; y <= CFG.GOAL_Y; y += 11){ ctx.beginPath(); ctx.moveTo(goalL, y); ctx.lineTo(goalR, y); ctx.stroke(); }
   ctx.restore();
 
+  // the net bulges where the ball went in
+  if(goalFx){
+    var age = 2.0 - goalFx.t;
+    ctx.strokeStyle = 'rgba(200,255,46,' + Math.max(0, .55 - age * .5) + ')';
+    ctx.lineWidth = 2;
+    for(var ring = 0; ring < 3; ring++){
+      ctx.beginPath();
+      ctx.arc(goalFx.x, CFG.GOAL_Y - 6, 10 + age * 130 + ring * 14, Math.PI, 2 * Math.PI);
+      ctx.stroke();
+    }
+  }
+
   // corner bonus zones
-  ctx.fillStyle = 'rgba(255,46,136,.16)';
-  ctx.fillRect(goalL, CFG.GOAL_Y - 4, 46, 6);
-  ctx.fillRect(goalR - 46, CFG.GOAL_Y - 4, 46, 6);
+  ctx.fillStyle = 'rgba(255,46,136,.18)';
+  ctx.fillRect(goalL, CFG.GOAL_Y - 4, 52, 6);
+  ctx.fillRect(goalR - 52, CFG.GOAL_Y - 4, 52, 6);
 
   // posts + backboard
   ctx.fillStyle = '#f2f7ff';
-  ctx.fillRect(goalL - 6, 8, 6, CFG.GOAL_Y - 2);
-  ctx.fillRect(goalR, 8, 6, CFG.GOAL_Y - 2);
-  ctx.fillRect(goalL - 6, 8, (goalR - goalL) + 12, 6);
+  ctx.fillRect(goalL - 6, top, 6, CFG.GOAL_Y - top + 2);
+  ctx.fillRect(goalR, top, 6, CFG.GOAL_Y - top + 2);
+  ctx.fillRect(goalL - 6, top, (goalR - goalL) + 12, 6);
   ctx.fillStyle = 'rgba(200,255,46,.14)';
   ctx.fillRect(goalL, CFG.GOAL_Y - 3, goalR - goalL, 3);
 }
 
 function drawKeeper(){
+  var x0 = keeper.x - keeper.w/2 + Math.min(0, keeper.lunge);
+  var w  = keeper.w + Math.abs(keeper.lunge);
   ctx.save();
-  ctx.shadowColor = '#2ee6ff'; ctx.shadowBlur = 18;
+  ctx.shadowColor = '#2ee6ff'; ctx.shadowBlur = 20;
   ctx.fillStyle = '#2ee6ff';
-  ctx.fillRect(keeper.x - keeper.w/2, keeper.y - keeper.h/2, keeper.w, keeper.h);
+  ctx.fillRect(x0, keeper.y - keeper.h/2, w, keeper.h);           // pads
   ctx.restore();
   ctx.fillStyle = '#dff9ff';
-  ctx.beginPath(); ctx.arc(keeper.x, keeper.y + 12, 7, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(keeper.x, keeper.y + 13, 7.5, 0, 7); ctx.fill();   // helmet
+  ctx.strokeStyle = 'rgba(223,249,255,.75)'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(keeper.x, keeper.y + 18); ctx.lineTo(keeper.x + (keeper.lunge >= 0 ? 20 : -20), keeper.y + 30);
+  ctx.stroke();                                                    // the keeper's stick
 }
 
-function drawDefenders(){
+function drawDefenders(now){
   for(var i = 0; i < defenders.length; i++){
     var d = defenders[i];
+    // before the shot they jog on the spot, so you can see who is coming for you
+    if(!ball.live){
+      d.x = d.home + Math.sin(now / 380 + d.phase) * 11;
+      d.y = d.homeY + Math.sin(now / 260 + d.phase) * 3;
+    }
     ctx.save();
-    ctx.shadowColor = '#ff2e88'; ctx.shadowBlur = 14;
+    ctx.shadowColor = '#ff2e88'; ctx.shadowBlur = 16;
     ctx.fillStyle = '#ff2e88';
     ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, 7); ctx.fill();
     ctx.restore();
-    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(d.x + 6, d.y + 4); ctx.lineTo(d.x + 15, d.y + 15); ctx.stroke();  // the stick
+    ctx.fillStyle = 'rgba(255,255,255,.9)';
+    ctx.font = '700 11px "Barlow Condensed", system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(String(i + 2), d.x, d.y + 4);          // shirt number
+    ctx.textAlign = 'left';
+    ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(d.x + 8, d.y + 6); ctx.lineTo(d.x + 19, d.y + 19); ctx.stroke();  // the stick
   }
 }
 
@@ -617,7 +820,8 @@ function drawAim(){
 
   // predicted path — the same maths the update step will run
   var px = ball.x, py = ball.y;
-  var pvx = Math.cos(a) * dist * CFG.POWER * 6, pvy = Math.sin(a) * dist * CFG.POWER * 6;
+  var pSpeed = (dist / CFG.MAX_PULL) * CFG.POWER * 100;
+  var pvx = Math.cos(a) * pSpeed, pvy = Math.sin(a) * pSpeed;
   ctx.setLineDash([2, 9]); ctx.lineWidth = 2.5;
   ctx.strokeStyle = 'rgba(255,255,255,' + (0.25 + power * 0.5) + ')';
   ctx.beginPath(); ctx.moveTo(px, py);
@@ -641,12 +845,46 @@ function drawAim(){
 function drawParticles(){
   for(var i = particles.length - 1; i >= 0; i--){
     var p = particles[i];
+    if(p.flake){                                   // confetti: gravity, drift and spin
+      p.vy += p.g; p.vx *= .99; p.x += p.vx; p.y += p.vy; p.rot += p.spin;
+      p.life -= p.decay;
+      if(p.life <= 0 || p.y > H + 20){ particles.splice(i, 1); continue; }
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.globalAlpha = Math.min(1, p.life * 2); ctx.fillStyle = p.c;
+      ctx.fillRect(-p.w/2, -2, p.w, 4); ctx.restore();
+      continue;
+    }
     p.x += p.vx; p.y += p.vy; p.vx *= .95; p.vy *= .95; p.life -= .022;
     if(p.life <= 0){ particles.splice(i, 1); continue; }
     ctx.globalAlpha = p.life; ctx.fillStyle = p.c;
     ctx.beginPath(); ctx.arc(p.x, p.y, 3.4 * p.life + 0.7, 0, 7); ctx.fill();
   }
   ctx.globalAlpha = 1;
+}
+
+/* ---------- the celebration ---------- */
+function drawCelebration(){
+  if(!goalFx) return;
+  var t = goalFx.t;
+  var pop = Math.min(1, (2.0 - t) * 6);              // scales up fast, then holds
+  var fade = Math.min(1, t * 1.5);
+  var colour = goalFx.corner ? '#ff2e88' : '#c8ff2e';
+
+  ctx.save();
+  ctx.translate(W/2, CFG.GOAL_Y + 210);
+  ctx.scale(pop, pop);
+  ctx.globalAlpha = fade;
+  ctx.textAlign = 'center';
+  ctx.shadowColor = colour; ctx.shadowBlur = 34;
+  ctx.fillStyle = colour;
+  ctx.font = '400 78px "Archivo Black", Impact, sans-serif';
+  ctx.fillText(goalFx.corner ? 'TOP BIN!' : 'GOAL!', 0, 0);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 20px "Barlow", system-ui, sans-serif';
+  ctx.fillText('+' + goalFx.pts + (goalFx.mult > 1 ? '   \u00d7' + goalFx.mult + ' STREAK' : ''), 0, 34);
+  ctx.restore();
+  ctx.textAlign = 'left';
 }
 
 /* ---------- the loop ---------- */
@@ -656,15 +894,18 @@ function loop(now){
   last = now;
 
   update(dt);
+  if(goalFx){ goalFx.t -= dt; if(goalFx.t <= 0) goalFx = null; }
+  var roar = goalFx ? Math.min(1, goalFx.t / 1.2) : 0;
 
   ctx.save();
   if(shake > 0){ ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake); shake *= 0.88; if(shake < .3) shake = 0; }
 
-  drawField(); drawGoal(); drawDefenders(); drawKeeper(); drawBall(); drawAim(); drawParticles();
+  drawField(); drawCrowd(now, roar); drawGoal(); drawDefenders(now); drawKeeper();
+  drawBall(); drawAim(); drawParticles(); drawCelebration();
 
   if(flash > 0){
-    ctx.fillStyle = 'rgba(200,255,46,' + (flash * .28) + ')';
-    ctx.fillRect(0, 0, W, H); flash -= .05;
+    ctx.fillStyle = 'rgba(200,255,46,' + (flash * .16) + ')';
+    ctx.fillRect(0, 0, W, H); flash -= .07;
   }
   ctx.restore();
 
@@ -672,7 +913,7 @@ function loop(now){
 }
 
 resetBall();
-keeper = { x: W/2, y: CFG.GOAL_Y + 14, w: 62, h: 15, dir: 1 };
+keeper = { x: W/2, y: CFG.GOAL_Y + 16, w: 54, h: 16, lunge: 0, commit: W/2, err: 0, react: 0 };
 defenders = []; particles = []; spawnDefenders();
 requestAnimationFrame(loop);
 
@@ -688,6 +929,8 @@ bind('sPower','oPower','POWER',        function(v){ return (v*100).toFixed(0) + 
 bind('sFric','oFric','FRICTION',       function(v){ return parseFloat(v).toFixed(3); });
 bind('sKeeper','oKeeper','KEEPER_SPEED',function(v){ return parseFloat(v).toFixed(1); });
 bind('sCurve','oCurve','CURVE',        function(v){ return parseFloat(v).toFixed(2); });
+bind('sDef','oDef','DEFENDERS',        function(v){ return v === '0' ? 'none' : v; });
+document.getElementById('sDef').addEventListener('change', spawnDefenders);
 
 /* ================================================================
    SECTION 3 — The drag-flick lab (a pure physics sandbox)
