@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en-ZA">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>STRIKE CIRCLE — Field Hockey Lab</title>
+<style>
+/* ============================================================
+   STRIKE CIRCLE — a single-file field hockey game + physics lab
+   Everything (HTML / CSS / JavaScript) lives in this one file.
+   Read the comments top to bottom — they explain how it works.
+   ============================================================ */
+
+:root{
+  --bg:#04060c;
+  --turf1:#0a2f52;
+  --turf2:#0e4a7d;
+  --line:rgba(255,255,255,.85);
+  --lime:#c8ff2e;
+  --magenta:#ff2e88;
+  --cyan:#2ee6ff;
+  --ink:#eaf2ff;
+  --muted:#7f93b3;
+  --panel:rgba(10,17,30,.72);
+  --edge:rgba(140,180,255,.16);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:
+    radial-gradient(1200px 700px at 50% -10%, #12325a 0%, transparent 60%),
+    radial-gradient(900px 500px at 10% 110%, #2a0b3d 0%, transparent 60%),
+    var(--bg);
+  color:var(--ink);
+  font-family:"Segoe UI",system-ui,-apple-system,Inter,Roboto,sans-serif;
+  min-height:100%;
+  overflow-x:hidden;
+}
+
+/* animated scanning glow across the whole page */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:linear-gradient(180deg,transparent 0%,rgba(46,230,255,.05) 50%,transparent 100%);
+  animation:sweep 9s linear infinite;
+}
+@keyframes sweep{0%{transform:translateY(-100%)}100%{transform:translateY(100%)}}
+
+.wrap{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:28px 18px 70px}
+
+/* ---------- header ---------- */
+header{text-align:center;margin-bottom:22px}
+.kicker{
+  font-size:11px;letter-spacing:.42em;text-transform:uppercase;color:var(--cyan);
+  border:1px solid var(--edge);border-radius:99px;padding:6px 16px;display:inline-block;
+  background:var(--panel);backdrop-filter:blur(6px);
+}
+h1{
+  font-size:clamp(38px,9vw,86px);line-height:.92;margin:14px 0 6px;
+  font-weight:900;letter-spacing:-.03em;
+  background:linear-gradient(92deg,var(--lime),var(--cyan) 45%,var(--magenta));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 0 26px rgba(46,230,255,.28));
+}
+.sub{color:var(--muted);font-size:15px;max-width:560px;margin:0 auto}
+
+/* ---------- tabs ---------- */
+nav{display:flex;gap:8px;justify-content:center;margin:22px 0 16px;flex-wrap:wrap}
+.tab{
+  background:var(--panel);border:1px solid var(--edge);color:var(--muted);
+  padding:9px 18px;border-radius:99px;cursor:pointer;font-size:13px;font-weight:600;
+  letter-spacing:.05em;transition:.18s;
+}
+.tab:hover{color:var(--ink);border-color:rgba(46,230,255,.4)}
+.tab.on{background:linear-gradient(92deg,rgba(200,255,46,.16),rgba(46,230,255,.16));color:var(--ink);border-color:var(--lime)}
+section.view{display:none;animation:fade .35s ease}
+section.view.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* ---------- HUD ---------- */
+.hud{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
+.stat{
+  background:var(--panel);border:1px solid var(--edge);border-radius:14px;
+  padding:10px 12px;text-align:center;backdrop-filter:blur(8px);
+}
+.stat b{display:block;font-size:clamp(18px,4vw,28px);font-weight:800;line-height:1.1}
+.stat span{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+#score b{color:var(--lime)} #streak b{color:var(--magenta)} #clock b{color:var(--cyan)}
+
+/* ---------- stage ---------- */
+.stage{position:relative;border-radius:20px;overflow:hidden;border:1px solid var(--edge);
+  box-shadow:0 30px 90px rgba(0,0,0,.65), 0 0 60px rgba(46,230,255,.06)}
+canvas{display:block;width:100%;height:auto;background:#07203a;touch-action:none}
+
+.overlay{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:rgba(3,8,18,.86);backdrop-filter:blur(5px);text-align:center;padding:24px;gap:12px;
+}
+.overlay.hide{display:none}
+.overlay h2{font-size:clamp(26px,6vw,48px);font-weight:900;letter-spacing:-.02em}
+.overlay p{color:var(--muted);max-width:440px;font-size:14px;line-height:1.6}
+.btn{
+  margin-top:6px;background:linear-gradient(92deg,var(--lime),var(--cyan));color:#04121e;border:0;
+  padding:13px 30px;border-radius:99px;font-weight:800;letter-spacing:.06em;cursor:pointer;font-size:14px;
+  box-shadow:0 0 30px rgba(200,255,46,.3);transition:.18s;
+}
+.btn:hover{transform:translateY(-2px) scale(1.03)}
+.keys{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:8px}
+kbd{background:#101c30;border:1px solid var(--edge);border-bottom-width:3px;border-radius:7px;
+  padding:5px 10px;font-size:11px;color:var(--ink);font-family:inherit}
+
+/* ---------- sliders / lab ---------- */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+@media(max-width:760px){.grid2{grid-template-columns:1fr}.hud{grid-template-columns:repeat(3,1fr)}}
+.card{background:var(--panel);border:1px solid var(--edge);border-radius:16px;padding:16px 18px;backdrop-filter:blur(8px)}
+.card h3{font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--cyan);margin-bottom:12px}
+.row{display:flex;align-items:center;gap:12px;margin:11px 0}
+.row label{flex:0 0 96px;font-size:12px;color:var(--muted);letter-spacing:.04em}
+.row output{flex:0 0 68px;text-align:right;font-weight:700;font-size:13px;color:var(--lime);font-variant-numeric:tabular-nums}
+input[type=range]{flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:99px;
+  background:linear-gradient(90deg,var(--cyan),var(--magenta));outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:17px;height:17px;border-radius:50%;
+  background:#fff;cursor:pointer;box-shadow:0 0 12px rgba(46,230,255,.9)}
+input[type=range]::-moz-range-thumb{width:17px;height:17px;border:0;border-radius:50%;background:#fff;cursor:pointer}
+.readout{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+.readout div{background:rgba(255,255,255,.03);border-radius:10px;padding:9px 12px}
+.readout small{display:block;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.readout strong{font-size:19px;font-weight:800}
+.note{font-size:12.5px;color:var(--muted);line-height:1.65;margin-top:10px}
+code{background:rgba(46,230,255,.1);color:var(--cyan);padding:1px 6px;border-radius:5px;font-size:12px}
+footer{text-align:center;color:var(--muted);font-size:12px;margin-top:34px;line-height:1.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="kicker">Penalty Corner Simulator</div>
+    <h1>STRIKE&nbsp;CIRCLE</h1>
+    <p class="sub">Drag back, aim, release. Beat the keeper, find the top corner, and bend the ball mid-flight. Then open the lab and change the physics yourself.</p>
+  </header>
+
+  <nav>
+    <button class="tab on" data-view="game">⚑ Play</button>
+    <button class="tab" data-view="lab">◎ Drag-Flick Lab</button>
+    <button class="tab" data-view="code">⌘ How It Works</button>
+  </nav>
+
+  <!-- ============ VIEW 1: THE GAME ============ -->
+  <section class="view on" id="view-game">
+    <div class="hud">
+      <div class="stat" id="score"><b>0</b><span>Score</span></div>
+      <div class="stat" id="streak"><b>0</b><span>Streak</span></div>
+      <div class="stat" id="clock"><b>60</b><span>Seconds</span></div>
+      <div class="stat" id="level"><b>1</b><span>Level</span></div>
+      <div class="stat" id="best"><b>0</b><span>Best</span></div>
+    </div>
+
+    <div class="stage">
+      <canvas id="game" width="900" height="620"></canvas>
+      <div class="overlay" id="ovl">
+        <h2 id="ovlTitle">READY?</h2>
+        <p id="ovlText">Drag <em>backwards</em> from the ball to load your shot, release to strike. While the ball is flying, hold <b>←</b> or <b>→</b> to bend it around the keeper. Corners score double.</p>
+        <button class="btn" id="startBtn">START MATCH</button>
+        <div class="keys">
+          <kbd>Drag = aim + power</kbd><kbd>← →  = curve</kbd><kbd>R = reset</kbd>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3>Live Physics — change the game while you play</h3>
+        <div class="row"><label>Shot power</label><input type="range" id="sPower" min="0.06" max="0.30" step="0.01" value="0.16"><output id="oPower"></output></div>
+        <div class="row"><label>Turf drag</label><input type="range" id="sFric" min="0.980" max="0.999" step="0.001" value="0.993"><output id="oFric"></output></div>
+        <div class="row"><label>Keeper speed</label><input type="range" id="sKeeper" min="0.5" max="6" step="0.1" value="2.2"><output id="oKeeper"></output></div>
+        <div class="row"><label>Curve force</label><input type="range" id="sCurve" min="0" max="0.5" step="0.02" value="0.22"><output id="oCurve"></output></div>
+        <p class="note">These sliders are wired straight into the variables the game loop reads every frame. Set turf drag to <code>0.999</code> and the ball barely slows down — that is real astroturf versus grass.</p>
+      </div>
+      <div class="card">
+        <h3>Match Log</h3>
+        <div id="log" style="font-size:12.5px;line-height:1.9;color:var(--muted);min-height:150px"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VIEW 2: THE LAB ============ -->
+  <section class="view" id="view-lab">
+    <div class="stage">
+      <canvas id="lab" width="900" height="480"></canvas>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h3>Drag-flick inputs</h3>
+        <div class="row"><label>Launch speed</label><input type="range" id="lSpeed" min="4" max="26" step="0.5" value="15"><output id="oSpeed"></output></div>
+        <div class="row"><label>Aim angle</label><input type="range" id="lAngle" min="-38" max="38" step="1" value="-8"><output id="oAngle"></output></div>
+        <div class="row"><label>Side spin</label><input type="range" id="lSpin" min="-0.35" max="0.35" step="0.01" value="0.12"><output id="oSpin"></output></div>
+        <div class="row"><label>Lift</label><input type="range" id="lLift" min="0" max="100" step="1" value="55"><output id="oLift"></output></div>
+        <p class="note">Spin creates the <b>Magnus effect</b>: a sideways force that grows with speed, which is why the ball bends late rather than early. The dotted line is the path the code predicts, one physics step at a time.</p>
+      </div>
+      <div class="card">
+        <h3>Predicted outcome</h3>
+        <div class="readout">
+          <div><small>Ball speed</small><strong id="rKmh">—</strong></div>
+          <div><small>Time to line</small><strong id="rTime">—</strong></div>
+          <div><small>Bend</small><strong id="rBend">—</strong></div>
+          <div><small>Verdict</small><strong id="rVerdict">—</strong></div>
+        </div>
+        <p class="note">Aim for the corners at pace: the keeper covers the middle, so the maths that beats them is <em>speed × distance from the keeper's reach</em>, not power alone.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VIEW 3: EXPLAINER ============ -->
+  <section class="view" id="view-code">
+    <div class="grid2">
+      <div class="card">
+        <h3>The game loop</h3>
+        <p class="note">Every game is the same three steps, sixty times a second:<br><br>
+        <code>1. read input</code> — where is the mouse, which keys are down<br>
+        <code>2. update</code> — move the ball, move the keeper, check collisions<br>
+        <code>3. draw</code> — wipe the canvas and paint everything in its new position<br><br>
+        <code>requestAnimationFrame(loop)</code> at the bottom of the function asks the browser to run it again on the next screen refresh. That single line is what makes it a game rather than a picture.</p>
+      </div>
+      <div class="card">
+        <h3>How the ball moves</h3>
+        <p class="note">The ball stores a position (<code>x, y</code>) and a velocity (<code>vx, vy</code>). Each frame:<br><br>
+        <code>x += vx</code> and <code>y += vy</code> move it,<br>
+        <code>vx *= friction</code> slows it down,<br>
+        <code>vx += curve</code> bends it while you hold an arrow key.<br><br>
+        That is genuinely all of it. Real physics engines are this same idea repeated with more forces.</p>
+      </div>
+      <div class="card">
+        <h3>Collisions, cheaply</h3>
+        <p class="note">The keeper is a rectangle, the ball is a circle. To test a hit, find the closest point on the rectangle to the ball's centre, then check whether it is nearer than the ball's radius. Two lines of <code>Math.max</code>/<code>Math.min</code> and one distance check — no library required.</p>
+      </div>
+      <div class="card">
+        <h3>Make it yours</h3>
+        <p class="note">Open this file in any editor and hunt for the <code>CFG</code> object near the top of the script. Change <code>GOAL_W</code> to widen the goal, add a third defender in <code>spawnDefenders()</code>, or set <code>shake</code> higher on a goal for more drama. Save, refresh, see what breaks — breaking it and fixing it is the whole job.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Built as a single HTML file — no frameworks, no build step, no installs.<br>
+    View source: everything on screen is right here in the code.
+  </footer>
+</div>
+
+<script>
+/* ================================================================
+   SECTION 0 — Tabs
+   ================================================================ */
+document.querySelectorAll('.tab').forEach(function(t){
+  t.addEventListener('click', function(){
+    document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('on');});
+    document.querySelectorAll('.view').forEach(function(x){x.classList.remove('on');});
+    t.classList.add('on');
+    document.getElementById('view-' + t.dataset.view).classList.add('on');
+  });
+});
+
+/* ================================================================
+   SECTION 1 — Sound. Tiny WebAudio helpers, no files needed.
+   ================================================================ */
+var AC = null;
+function audio(){ if(!AC){ AC = new (window.AudioContext||window.webkitAudioContext)(); } return AC; }
+function tone(freq, dur, type, vol){
+  try{
+    var c = audio(), o = c.createOscillator(), g = c.createGain();
+    o.type = type || 'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol || 0.14, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
+    o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime + dur);
+  }catch(e){}
+}
+function noise(dur, vol){
+  try{
+    var c = audio(), n = c.sampleRate * dur, buf = c.createBuffer(1, n, c.sampleRate), d = buf.getChannelData(0);
+    for(var i=0;i<n;i++){ d[i] = (Math.random()*2-1) * (1 - i/n); }
+    var s = c.createBufferSource(); s.buffer = buf;
+    var g = c.createGain(); g.gain.value = vol || 0.2;
+    s.connect(g); g.connect(c.destination); s.start();
+  }catch(e){}
+}
+function sfxHit(){ tone(220, .09, 'square', .10); noise(.06, .12); }
+function sfxGoal(){ tone(660,.09,'square',.12); setTimeout(function(){tone(880,.10,'square',.12);},80);
+                    setTimeout(function(){tone(1320,.28,'sawtooth',.10);},170); noise(.7,.10); }
+function sfxSave(){ tone(110,.22,'sawtooth',.14); noise(.15,.16); }
+
+/* ================================================================
+   SECTION 2 — The game
+   ================================================================ */
+var cv  = document.getElementById('game');
+var ctx = cv.getContext('2d');
+var W = cv.width, H = cv.height;
+
+// CFG holds every "magic number". Tweak these to change the feel.
+var CFG = {
+  GOAL_W: 250,        // width of the goal mouth in pixels
+  GOAL_Y: 74,         // how far down the canvas the goal line sits
+  BALL_R: 9,
+  POWER: 0.16,        // drag distance -> speed multiplier
+  FRICTION: 0.993,    // 1 = ice, 0.9 = deep mud
+  KEEPER_SPEED: 2.2,
+  CURVE: 0.22,        // sideways force per frame while an arrow is held
+  MAX_PULL: 190,      // longest useful drag
+  SPOT: {x: 450, y: 500}
+};
+
+var goalL = W/2 - CFG.GOAL_W/2;
+var goalR = W/2 + CFG.GOAL_W/2;
+
+var ball, keeper, defenders, particles, trail;
+var score = 0, streak = 0, best = 0, level = 1, goals = 0, shots = 0;
+var timeLeft = 60, running = false, dragging = false, aim = {x:0,y:0};
+var shake = 0, flash = 0, resolving = false, curveLeft = 0;
+var keys = {};
+
+try{ best = parseInt(localStorage.getItem('strikeCircleBest') || '0', 10) || 0; }catch(e){ best = 0; }
+document.querySelector('#best b').textContent = best;
+
+function resetBall(){
+  ball = { x: CFG.SPOT.x, y: CFG.SPOT.y, vx: 0, vy: 0, live: false };
+  curveLeft = 100;              // "curve fuel" — one bend per shot
+  trail = [];
+  resolving = false;
+  if(typeof spawnDefenders === 'function'){ spawnDefenders(); }  // send the runners back to the line
+}
+
+function spawnDefenders(){
+  // one runner per level, capped at four, starting on the goal line
+  defenders = [];
+  var n = Math.min(1 + Math.floor((level - 1) / 2), 4);
+  for(var i = 0; i < n; i++){
+    var t = (i + 1) / (n + 1);
+    defenders.push({ x: goalL + (goalR - goalL) * t, y: CFG.GOAL_Y + 6, r: 13, speed: 1.5 + level * 0.25 });
+  }
+}
+
+function newGame(){
+  score = 0; streak = 0; level = 1; goals = 0; shots = 0; timeLeft = 60;
+  running = true;
+  keeper = { x: W/2, y: CFG.GOAL_Y + 14, w: 62, h: 15, dir: 1 };
+  spawnDefenders(); resetBall(); particles = [];
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('ovl').classList.add('hide');
+  updateHUD();
+}
+
+function updateHUD(){
+  document.querySelector('#score b').textContent  = score;
+  document.querySelector('#streak b').textContent = streak;
+  document.querySelector('#clock b').textContent  = Math.max(0, Math.ceil(timeLeft));
+  document.querySelector('#level b').textContent  = level;
+  document.querySelector('#best b').textContent   = best;
+}
+
+function log(msg, colour){
+  var el = document.getElementById('log');
+  var line = document.createElement('div');
+  line.innerHTML = '<span style="color:' + colour + '">&#9679;</span> ' + msg;
+  el.prepend(line);
+  while(el.children.length > 8){ el.removeChild(el.lastChild); }
+}
+
+/* ---------- input: pointer (mouse + touch) ---------- */
+function pointerPos(e){
+  var r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+}
+cv.addEventListener('pointerdown', function(e){
+  if(!running || ball.live || resolving) return;
+  var p = pointerPos(e);
+  if(Math.hypot(p.x - ball.x, p.y - ball.y) < 120){ dragging = true; aim = p; cv.setPointerCapture(e.pointerId); }
+});
+cv.addEventListener('pointermove', function(e){ if(dragging){ aim = pointerPos(e); } });
+cv.addEventListener('pointerup', function(){
+  if(!dragging) return;
+  dragging = false;
+  // slingshot: pull back from the ball, the shot fires the opposite way
+  var dx = ball.x - aim.x, dy = ball.y - aim.y;
+  var dist = Math.min(Math.hypot(dx, dy), CFG.MAX_PULL);
+  if(dist < 14) return;                      // ignore a nervous tap
+  var a = Math.atan2(dy, dx);
+  ball.vx = Math.cos(a) * dist * CFG.POWER * 6;
+  ball.vy = Math.sin(a) * dist * CFG.POWER * 6;
+  ball.live = true; shots++;
+  sfxHit();
+});
+window.addEventListener('keydown', function(e){
+  keys[e.key] = true;
+  if(e.key === 'r' || e.key === 'R'){ if(running){ resetBall(); } }
+  if(e.key === ' ' ){ e.preventDefault(); }
+});
+window.addEventListener('keyup', function(e){ keys[e.key] = false; });
+
+/* ---------- outcomes ---------- */
+function burst(x, y, colour, n){
+  for(var i = 0; i < n; i++){
+    var a = Math.random() * Math.PI * 2, s = Math.random() * 7 + 1.5;
+    particles.push({ x:x, y:y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:1, c:colour });
+  }
+}
+
+function scoreGoal(){
+  resolving = true;
+  var corner = (ball.x < goalL + 46 || ball.x > goalR - 46);
+  streak++;
+  var pts = (corner ? 200 : 100) * Math.min(streak, 5);
+  score += pts; goals++;
+  if(score > best){ best = score; try{ localStorage.setItem('strikeCircleBest', String(best)); }catch(e){} }
+  if(goals % 3 === 0){ level++; spawnDefenders(); log('Level ' + level + ' — defence steps up', 'var(--cyan)'); }
+  burst(ball.x, CFG.GOAL_Y, corner ? '#ff2e88' : '#c8ff2e', corner ? 90 : 55);
+  shake = corner ? 22 : 13; flash = 1;
+  sfxGoal();
+  log((corner ? 'TOP BIN! ' : 'GOAL! ') + '+' + pts + (streak > 1 ? '  (x' + Math.min(streak,5) + ' streak)' : ''), 'var(--lime)');
+  updateHUD();
+  setTimeout(resetBall, 700);
+}
+
+function saved(who){
+  resolving = true; streak = 0;
+  burst(ball.x, ball.y, '#7f93b3', 22);
+  shake = 7; sfxSave();
+  log(who + ' — streak reset', 'var(--magenta)');
+  updateHUD();
+  setTimeout(resetBall, 600);
+}
+
+/* ---------- collision helper: circle vs rectangle ---------- */
+function hitsRect(cx, cy, r, rx, ry, rw, rh){
+  var nx = Math.max(rx, Math.min(cx, rx + rw));   // closest x on the rectangle
+  var ny = Math.max(ry, Math.min(cy, ry + rh));   // closest y on the rectangle
+  return Math.hypot(cx - nx, cy - ny) < r;
+}
+
+/* ---------- update: one physics step ---------- */
+function update(dt){
+  if(!running) return;
+
+  timeLeft -= dt;
+  if(timeLeft <= 0){ endGame(); return; }
+  if(Math.abs(timeLeft * 10 % 10) < 1) updateHUD();
+
+  // keeper slides toward the ball, but is never quite quick enough
+  var target = ball.live ? ball.x : W/2 + Math.sin(Date.now()/700) * 60;
+  target = Math.max(goalL + keeper.w/2, Math.min(goalR - keeper.w/2, target));
+  var diff = target - keeper.x;
+  keeper.x += Math.max(-CFG.KEEPER_SPEED, Math.min(CFG.KEEPER_SPEED, diff * 0.12 + Math.sign(diff) * 0.6));
+
+  if(!ball.live) return;
+
+  // curve: hold an arrow key while the ball is flying
+  if(curveLeft > 0){
+    if(keys.ArrowLeft || keys.a){  ball.vx -= CFG.CURVE; curveLeft -= 2.2; }
+    if(keys.ArrowRight || keys.d){ ball.vx += CFG.CURVE; curveLeft -= 2.2; }
+  }
+
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+  ball.vx *= CFG.FRICTION;
+  ball.vy *= CFG.FRICTION;
+
+  trail.push({x:ball.x, y:ball.y});
+  if(trail.length > 26) trail.shift();
+
+  // side walls bounce
+  if(ball.x < CFG.BALL_R){ ball.x = CFG.BALL_R; ball.vx *= -0.7; }
+  if(ball.x > W - CFG.BALL_R){ ball.x = W - CFG.BALL_R; ball.vx *= -0.7; }
+
+  if(resolving) return;
+
+  // defenders charge the ball
+  for(var i = 0; i < defenders.length; i++){
+    var d = defenders[i];
+    var a = Math.atan2(ball.y - d.y, ball.x - d.x);
+    d.x += Math.cos(a) * d.speed; d.y += Math.sin(a) * d.speed;
+    if(Math.hypot(d.x - ball.x, d.y - ball.y) < d.r + CFG.BALL_R){ saved('Blocked by the runner'); return; }
+  }
+
+  // keeper save
+  if(hitsRect(ball.x, ball.y, CFG.BALL_R, keeper.x - keeper.w/2, keeper.y - keeper.h/2, keeper.w, keeper.h)){
+    saved('Keeper stands it up'); return;
+  }
+
+  // over the line?
+  if(ball.y - CFG.BALL_R < CFG.GOAL_Y){
+    if(ball.x > goalL && ball.x < goalR){ scoreGoal(); }
+    else { saved('Wide of the post'); }
+    return;
+  }
+
+  // ran out of legs, or dribbled off the bottom
+  if(Math.hypot(ball.vx, ball.vy) < 0.35 || ball.y > H + 30){ saved('Shot ran out of pace'); }
+}
+
+function endGame(){
+  running = false;
+  var acc = shots ? Math.round(goals / shots * 100) : 0;
+  document.getElementById('ovlTitle').textContent = 'FULL TIME — ' + score;
+  document.getElementById('ovlText').innerHTML =
+    goals + ' goals from ' + shots + ' shots (' + acc + '% conversion). Personal best: <b>' + best + '</b>.';
+  document.getElementById('startBtn').textContent = 'PLAY AGAIN';
+  document.getElementById('ovl').classList.remove('hide');
+}
+
+/* ---------- draw ---------- */
+function drawField(){
+  var g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0e4a7d'); g.addColorStop(1, '#082a4c');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  // mown stripes
+  ctx.fillStyle = 'rgba(255,255,255,.022)';
+  for(var y = 0; y < H; y += 62){ ctx.fillRect(0, y, W, 31); }
+
+  ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(0, CFG.GOAL_Y); ctx.lineTo(W, CFG.GOAL_Y); ctx.stroke();   // back line
+
+  // the shooting circle (the "D")
+  ctx.beginPath();
+  ctx.arc(W/2, CFG.GOAL_Y, 300, 0.06 * Math.PI, 0.94 * Math.PI);
+  ctx.setLineDash([]); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(W/2, CFG.GOAL_Y, 340, 0.08 * Math.PI, 0.92 * Math.PI);
+  ctx.setLineDash([9, 11]); ctx.strokeStyle = 'rgba(255,255,255,.32)'; ctx.stroke();
+  ctx.setLineDash([]);
+
+  // penalty spot
+  ctx.fillStyle = 'rgba(255,255,255,.8)';
+  ctx.beginPath(); ctx.arc(W/2, CFG.GOAL_Y + 180, 4, 0, 7); ctx.fill();
+}
+
+function drawGoal(){
+  // net
+  ctx.save();
+  ctx.strokeStyle = 'rgba(220,240,255,.22)'; ctx.lineWidth = 1;
+  for(var x = goalL; x <= goalR; x += 11){ ctx.beginPath(); ctx.moveTo(x, 8); ctx.lineTo(x, CFG.GOAL_Y); ctx.stroke(); }
+  for(var y = 8; y <= CFG.GOAL_Y; y += 11){ ctx.beginPath(); ctx.moveTo(goalL, y); ctx.lineTo(goalR, y); ctx.stroke(); }
+  ctx.restore();
+
+  // corner bonus zones
+  ctx.fillStyle = 'rgba(255,46,136,.16)';
+  ctx.fillRect(goalL, CFG.GOAL_Y - 4, 46, 6);
+  ctx.fillRect(goalR - 46, CFG.GOAL_Y - 4, 46, 6);
+
+  // posts + backboard
+  ctx.fillStyle = '#f2f7ff';
+  ctx.fillRect(goalL - 6, 8, 6, CFG.GOAL_Y - 2);
+  ctx.fillRect(goalR, 8, 6, CFG.GOAL_Y - 2);
+  ctx.fillRect(goalL - 6, 8, (goalR - goalL) + 12, 6);
+  ctx.fillStyle = 'rgba(200,255,46,.14)';
+  ctx.fillRect(goalL, CFG.GOAL_Y - 3, goalR - goalL, 3);
+}
+
+function drawKeeper(){
+  ctx.save();
+  ctx.shadowColor = '#2ee6ff'; ctx.shadowBlur = 18;
+  ctx.fillStyle = '#2ee6ff';
+  ctx.fillRect(keeper.x - keeper.w/2, keeper.y - keeper.h/2, keeper.w, keeper.h);
+  ctx.restore();
+  ctx.fillStyle = '#dff9ff';
+  ctx.beginPath(); ctx.arc(keeper.x, keeper.y + 12, 7, 0, 7); ctx.fill();
+}
+
+function drawDefenders(){
+  for(var i = 0; i < defenders.length; i++){
+    var d = defenders[i];
+    ctx.save();
+    ctx.shadowColor = '#ff2e88'; ctx.shadowBlur = 14;
+    ctx.fillStyle = '#ff2e88';
+    ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, 7); ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(d.x + 6, d.y + 4); ctx.lineTo(d.x + 15, d.y + 15); ctx.stroke();  // the stick
+  }
+}
+
+function drawBall(){
+  // motion trail
+  for(var i = 0; i < trail.length; i++){
+    var t = i / trail.length;
+    ctx.fillStyle = 'rgba(200,255,46,' + (t * 0.4) + ')';
+    ctx.beginPath(); ctx.arc(trail[i].x, trail[i].y, CFG.BALL_R * t * 0.9, 0, 7); ctx.fill();
+  }
+  ctx.save();
+  ctx.shadowColor = '#c8ff2e'; ctx.shadowBlur = 22;
+  ctx.fillStyle = '#f6ffd9';
+  ctx.beginPath(); ctx.arc(ball.x, ball.y, CFG.BALL_R, 0, 7); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(20,40,10,.5)'; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.arc(ball.x, ball.y, CFG.BALL_R * .55, 0, 7); ctx.stroke();
+
+  // curve fuel bar, drawn on the ball while it flies
+  if(ball.live && curveLeft > 0){
+    ctx.fillStyle = 'rgba(46,230,255,.85)';
+    ctx.fillRect(ball.x - 16, ball.y + 15, 32 * (curveLeft/100), 3);
+  }
+}
+
+function drawAim(){
+  if(!dragging) return;
+  var dx = ball.x - aim.x, dy = ball.y - aim.y;
+  var dist = Math.min(Math.hypot(dx, dy), CFG.MAX_PULL);
+  var a = Math.atan2(dy, dx);
+  var power = dist / CFG.MAX_PULL;
+
+  // predicted path — the same maths the update step will run
+  var px = ball.x, py = ball.y;
+  var pvx = Math.cos(a) * dist * CFG.POWER * 6, pvy = Math.sin(a) * dist * CFG.POWER * 6;
+  ctx.setLineDash([2, 9]); ctx.lineWidth = 2.5;
+  ctx.strokeStyle = 'rgba(255,255,255,' + (0.25 + power * 0.5) + ')';
+  ctx.beginPath(); ctx.moveTo(px, py);
+  for(var s = 0; s < 70; s++){
+    px += pvx; py += pvy; pvx *= CFG.FRICTION; pvy *= CFG.FRICTION;
+    ctx.lineTo(px, py);
+    if(py < CFG.GOAL_Y) break;
+  }
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // the pull-back band
+  ctx.strokeStyle = 'rgba(255,46,136,.85)'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(ball.x, ball.y);
+  ctx.lineTo(ball.x - Math.cos(a) * dist, ball.y - Math.sin(a) * dist); ctx.stroke();
+
+  // power arc around the ball
+  ctx.strokeStyle = power > .8 ? '#ff2e88' : '#c8ff2e'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(ball.x, ball.y, 24, -Math.PI/2, -Math.PI/2 + power * Math.PI * 2); ctx.stroke();
+}
+
+function drawParticles(){
+  for(var i = particles.length - 1; i >= 0; i--){
+    var p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vx *= .95; p.vy *= .95; p.life -= .022;
+    if(p.life <= 0){ particles.splice(i, 1); continue; }
+    ctx.globalAlpha = p.life; ctx.fillStyle = p.c;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 3.4 * p.life + 0.7, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ---------- the loop ---------- */
+var last = performance.now();
+function loop(now){
+  var dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+
+  update(dt);
+
+  ctx.save();
+  if(shake > 0){ ctx.translate((Math.random()-.5)*shake, (Math.random()-.5)*shake); shake *= 0.88; if(shake < .3) shake = 0; }
+
+  drawField(); drawGoal(); drawDefenders(); drawKeeper(); drawBall(); drawAim(); drawParticles();
+
+  if(flash > 0){
+    ctx.fillStyle = 'rgba(200,255,46,' + (flash * .28) + ')';
+    ctx.fillRect(0, 0, W, H); flash -= .05;
+  }
+  ctx.restore();
+
+  requestAnimationFrame(loop);
+}
+
+resetBall();
+keeper = { x: W/2, y: CFG.GOAL_Y + 14, w: 62, h: 15, dir: 1 };
+defenders = []; particles = []; spawnDefenders();
+requestAnimationFrame(loop);
+
+document.getElementById('startBtn').addEventListener('click', function(){ audio(); newGame(); });
+
+/* ---------- live physics sliders ---------- */
+function bind(id, out, key, fmt){
+  var s = document.getElementById(id), o = document.getElementById(out);
+  function sync(){ CFG[key] = parseFloat(s.value); o.textContent = fmt(s.value); }
+  s.addEventListener('input', sync); sync();
+}
+bind('sPower','oPower','POWER',        function(v){ return (v*100).toFixed(0) + '%'; });
+bind('sFric','oFric','FRICTION',       function(v){ return parseFloat(v).toFixed(3); });
+bind('sKeeper','oKeeper','KEEPER_SPEED',function(v){ return parseFloat(v).toFixed(1); });
+bind('sCurve','oCurve','CURVE',        function(v){ return parseFloat(v).toFixed(2); });
+
+/* ================================================================
+   SECTION 3 — The drag-flick lab (a pure physics sandbox)
+   ================================================================ */
+var lc = document.getElementById('lab'), lx = lc.getContext('2d');
+var LW = lc.width, LH = lc.height;
+
+function labDraw(){
+  var speed = +document.getElementById('lSpeed').value;
+  var angle = +document.getElementById('lAngle').value;
+  var spin  = +document.getElementById('lSpin').value;
+  var lift  = +document.getElementById('lLift').value;
+
+  document.getElementById('oSpeed').textContent = speed.toFixed(1);
+  document.getElementById('oAngle').textContent = angle + '°';
+  document.getElementById('oSpin').textContent  = spin.toFixed(2);
+  document.getElementById('oLift').textContent  = lift + '%';
+
+  // background
+  var g = lx.createLinearGradient(0, 0, 0, LH);
+  g.addColorStop(0, '#0e4a7d'); g.addColorStop(1, '#071f38');
+  lx.fillStyle = g; lx.fillRect(0, 0, LW, LH);
+  lx.fillStyle = 'rgba(255,255,255,.02)';
+  for(var y = 0; y < LH; y += 54){ lx.fillRect(0, y, LW, 27); }
+
+  var gy = 70, gl = LW/2 - 130, gr = LW/2 + 130;
+  lx.strokeStyle = 'rgba(255,255,255,.7)'; lx.lineWidth = 2;
+  lx.beginPath(); lx.moveTo(0, gy); lx.lineTo(LW, gy); lx.stroke();
+  lx.strokeStyle = 'rgba(220,240,255,.2)'; lx.lineWidth = 1;
+  for(var x = gl; x <= gr; x += 11){ lx.beginPath(); lx.moveTo(x, 10); lx.lineTo(x, gy); lx.stroke(); }
+  for(var yy = 10; yy <= gy; yy += 11){ lx.beginPath(); lx.moveTo(gl, yy); lx.lineTo(gr, yy); lx.stroke(); }
+  lx.fillStyle = '#f2f7ff';
+  lx.fillRect(gl - 6, 10, 6, gy - 4); lx.fillRect(gr, 10, 6, gy - 4); lx.fillRect(gl - 6, 10, (gr-gl)+12, 6);
+
+  // keeper: parks on the middle of the goal
+  var kx = LW/2, kw = 66;
+  lx.save(); lx.shadowColor = '#2ee6ff'; lx.shadowBlur = 16; lx.fillStyle = '#2ee6ff';
+  lx.fillRect(kx - kw/2, gy + 8, kw, 15); lx.restore();
+
+  // simulate the flight, one step at a time
+  var px = LW/2, py = LH - 60;
+  var a = (angle - 90) * Math.PI / 180;
+  var vx = Math.cos(a) * speed, vy = Math.sin(a) * speed;
+  var pts = [], steps = 0, beat = null, crossX = null;
+
+  while(steps < 400){
+    vx += spin * (Math.abs(vy) / 22);   // Magnus: sideways force scales with speed
+    vx *= 0.997; vy *= 0.997;
+    px += vx; py += vy; steps++;
+    pts.push({x:px, y:py});
+    if(py <= gy){ crossX = px; break; }
+    if(px < 0 || px > LW || py > LH) break;
+  }
+
+  // the path
+  lx.setLineDash([3, 8]); lx.lineWidth = 2.5; lx.strokeStyle = 'rgba(255,255,255,.45)';
+  lx.beginPath(); lx.moveTo(LW/2, LH - 60);
+  for(var i = 0; i < pts.length; i++){ lx.lineTo(pts[i].x, pts[i].y); }
+  lx.stroke(); lx.setLineDash([]);
+
+  // ball ghosts along the path, brighter and higher as lift increases
+  for(var j = 0; j < pts.length; j += 8){
+    var t = j / Math.max(pts.length, 1);
+    var r = 4 + (lift / 100) * 5 * t;
+    lx.fillStyle = 'rgba(200,255,46,' + (0.18 + t * 0.55) + ')';
+    lx.beginPath(); lx.arc(pts[j].x, pts[j].y, r, 0, 7); lx.fill();
+  }
+
+  // striker
+  lx.save(); lx.shadowColor = '#c8ff2e'; lx.shadowBlur = 18; lx.fillStyle = '#f6ffd9';
+  lx.beginPath(); lx.arc(LW/2, LH - 60, 9, 0, 7); lx.fill(); lx.restore();
+  lx.fillStyle = 'rgba(255,255,255,.55)'; lx.font = '11px system-ui';
+  lx.fillText('INJECTION / STRIKE POINT', LW/2 - 78, LH - 34);
+
+  // verdict
+  var kmh = (speed * 4.1).toFixed(0) + ' km/h';
+  var secs = (steps / 60).toFixed(2) + ' s';
+  var verdict, colour;
+  if(crossX === null){ verdict = 'MISSED THE TARGET'; colour = '#7f93b3'; }
+  else if(crossX < gl || crossX > gr){ verdict = 'WIDE'; colour = '#ff2e88'; }
+  else if(Math.abs(crossX - kx) < kw/2 + 8 && speed < 20){ verdict = 'SAVED'; colour = '#2ee6ff'; }
+  else if(crossX < gl + 45 || crossX > gr - 45){ verdict = 'TOP CORNER'; colour = '#c8ff2e'; }
+  else { verdict = 'GOAL'; colour = '#c8ff2e'; }
+
+  document.getElementById('rKmh').textContent  = kmh;
+  document.getElementById('rTime').textContent = secs;
+  document.getElementById('rBend').textContent = (spin === 0 ? 'straight' : (spin > 0 ? 'right ' : 'left ') + Math.abs(spin * 100).toFixed(0) + '%');
+  var v = document.getElementById('rVerdict');
+  v.textContent = verdict; v.style.color = colour;
+
+  // mark where it crosses the line
+  if(crossX !== null){
+    lx.strokeStyle = colour; lx.lineWidth = 3;
+    lx.beginPath(); lx.arc(crossX, gy, 13, 0, 7); lx.stroke();
+    lx.font = 'bold 13px system-ui'; lx.fillStyle = colour;
+    lx.fillText(verdict, Math.max(10, Math.min(crossX - 30, LW - 110)), gy - 22);
+  }
+}
+['lSpeed','lAngle','lSpin','lLift'].forEach(function(id){
+  document.getElementById(id).addEventListener('input', labDraw);
+});
+labDraw();
+</script>
+</body>
+</html>
