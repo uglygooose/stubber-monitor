@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>STRIKE CIRCLE — Field Hockey Lab</title>
+<title>Strike Circle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Barlow:wght@400;600;800&family=Barlow+Condensed:wght@600;700&display=swap">
 <style>
 /* ============================================================
    STRIKE CIRCLE — a single-file field hockey game + physics lab
@@ -33,7 +36,7 @@ body{
     radial-gradient(900px 500px at 10% 110%, #2a0b3d 0%, transparent 60%),
     var(--bg);
   color:var(--ink);
-  font-family:"Segoe UI",system-ui,-apple-system,Inter,Roboto,sans-serif;
+  font-family:"Barlow","Segoe UI",system-ui,-apple-system,sans-serif;
   min-height:100%;
   overflow-x:hidden;
 }
@@ -56,8 +59,9 @@ header{text-align:center;margin-bottom:22px}
   background:var(--panel);backdrop-filter:blur(6px);
 }
 h1{
-  font-size:clamp(38px,9vw,86px);line-height:.92;margin:14px 0 6px;
-  font-weight:900;letter-spacing:-.03em;
+  font-family:"Archivo Black","Barlow Condensed",Impact,sans-serif;
+  font-size:clamp(40px,10vw,92px);line-height:.9;margin:14px 0 8px;
+  font-weight:400;letter-spacing:-.02em;text-wrap:balance;
   background:linear-gradient(92deg,var(--lime),var(--cyan) 45%,var(--magenta));
   -webkit-background-clip:text;background-clip:text;color:transparent;
   filter:drop-shadow(0 0 26px rgba(46,230,255,.28));
@@ -83,8 +87,8 @@ section.view.on{display:block}
   background:var(--panel);border:1px solid var(--edge);border-radius:14px;
   padding:10px 12px;text-align:center;backdrop-filter:blur(8px);
 }
-.stat b{display:block;font-size:clamp(18px,4vw,28px);font-weight:800;line-height:1.1}
-.stat span{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.stat b{display:block;font-family:"Archivo Black",sans-serif;font-size:clamp(18px,4.4vw,28px);line-height:1.1;font-variant-numeric:tabular-nums}
+.stat span{font-family:"Barlow Condensed",sans-serif;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
 #score b{color:var(--lime)} #streak b{color:var(--magenta)} #clock b{color:var(--cyan)}
 
 /* ---------- stage ---------- */
@@ -97,7 +101,7 @@ canvas{display:block;width:100%;height:auto;background:#07203a;touch-action:none
   background:rgba(3,8,18,.86);backdrop-filter:blur(5px);text-align:center;padding:24px;gap:12px;
 }
 .overlay.hide{display:none}
-.overlay h2{font-size:clamp(26px,6vw,48px);font-weight:900;letter-spacing:-.02em}
+.overlay h2{font-family:"Archivo Black",sans-serif;font-size:clamp(26px,6.5vw,48px);font-weight:400;letter-spacing:-.02em;text-wrap:balance}
 .overlay p{color:var(--muted);max-width:440px;font-size:14px;line-height:1.6}
 .btn{
   margin-top:6px;background:linear-gradient(92deg,var(--lime),var(--cyan));color:#04121e;border:0;
@@ -125,7 +129,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border:0;border-radiu
 .readout{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
 .readout div{background:rgba(255,255,255,.03);border-radius:10px;padding:9px 12px}
 .readout small{display:block;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
-.readout strong{font-size:19px;font-weight:800}
+.readout strong{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
 .note{font-size:12.5px;color:var(--muted);line-height:1.65;margin-top:10px}
 code{background:rgba(46,230,255,.1);color:var(--cyan);padding:1px 6px;border-radius:5px;font-size:12px}
 footer{text-align:center;color:var(--muted);font-size:12px;margin-top:34px;line-height:1.8}
@@ -160,10 +164,10 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:34px;line-
       <canvas id="game" width="900" height="620"></canvas>
       <div class="overlay" id="ovl">
         <h2 id="ovlTitle">READY?</h2>
-        <p id="ovlText">Drag <em>backwards</em> from the ball to load your shot, release to strike. While the ball is flying, hold <b>←</b> or <b>→</b> to bend it around the keeper. Corners score double.</p>
+        <p id="ovlText">Drag <em>backwards</em> from the ball to load your shot, release to strike. While the ball is flying, hold <b>←</b>/<b>→</b> — or touch either side of the pitch on a phone — to bend it around the keeper. Corners score double.</p>
         <button class="btn" id="startBtn">START MATCH</button>
         <div class="keys">
-          <kbd>Drag = aim + power</kbd><kbd>← →  = curve</kbd><kbd>R = reset</kbd>
+          <kbd>Drag = aim + power</kbd><kbd>← → or touch = curve</kbd><kbd>R = reset</kbd>
         </div>
       </div>
     </div>
@@ -314,7 +318,7 @@ var goalR = W/2 + CFG.GOAL_W/2;
 var ball, keeper, defenders, particles, trail;
 var score = 0, streak = 0, best = 0, level = 1, goals = 0, shots = 0;
 var timeLeft = 60, running = false, dragging = false, aim = {x:0,y:0};
-var shake = 0, flash = 0, resolving = false, curveLeft = 0;
+var shake = 0, flash = 0, resolving = false, curveLeft = 0, touchCurve = 0;
 var keys = {};
 
 try{ best = parseInt(localStorage.getItem('strikeCircleBest') || '0', 10) || 0; }catch(e){ best = 0; }
@@ -370,18 +374,23 @@ function pointerPos(e){
   return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
 }
 cv.addEventListener('pointerdown', function(e){
-  if(!running || ball.live || resolving) return;
+  if(!running) return;
   var p = pointerPos(e);
+  // ball already flying? then a touch on either side bends it (the mobile equivalent of the arrow keys)
+  if(ball.live && !resolving){ touchCurve = p.x < ball.x ? -1 : 1; return; }
+  if(ball.live || resolving) return;
   if(Math.hypot(p.x - ball.x, p.y - ball.y) < 120){ dragging = true; aim = p; cv.setPointerCapture(e.pointerId); }
 });
 cv.addEventListener('pointermove', function(e){ if(dragging){ aim = pointerPos(e); } });
+cv.addEventListener('pointercancel', function(){ touchCurve = 0; });
 cv.addEventListener('pointerup', function(){
+  touchCurve = 0;
   if(!dragging) return;
   dragging = false;
   // slingshot: pull back from the ball, the shot fires the opposite way
   var dx = ball.x - aim.x, dy = ball.y - aim.y;
   var dist = Math.min(Math.hypot(dx, dy), CFG.MAX_PULL);
-  if(dist < 14) return;                      // ignore a nervous tap
+  if(dist < 14) return;                      // ignore a nervous tap                      // ignore a nervous tap
   var a = Math.atan2(dy, dx);
   ball.vx = Math.cos(a) * dist * CFG.POWER * 6;
   ball.vy = Math.sin(a) * dist * CFG.POWER * 6;
@@ -453,8 +462,8 @@ function update(dt){
 
   // curve: hold an arrow key while the ball is flying
   if(curveLeft > 0){
-    if(keys.ArrowLeft || keys.a){  ball.vx -= CFG.CURVE; curveLeft -= 2.2; }
-    if(keys.ArrowRight || keys.d){ ball.vx += CFG.CURVE; curveLeft -= 2.2; }
+    if(keys.ArrowLeft  || keys.a || touchCurve === -1){ ball.vx -= CFG.CURVE; curveLeft -= 2.2; }
+    if(keys.ArrowRight || keys.d || touchCurve ===  1){ ball.vx += CFG.CURVE; curveLeft -= 2.2; }
   }
 
   ball.x += ball.vx;
